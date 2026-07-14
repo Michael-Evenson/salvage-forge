@@ -185,7 +185,7 @@ function match_template(inv::Vector{StockPiece}, tpl::Template)
     end
     # ---- part demands: count check ----
     for d in tpl.parts
-        have = count(p -> p.category == :part && p.family in d.families, inv)
+        have = count(p -> p.family in d.families, inv)  # match by family, any category
         have < d.qty && (shortfall["part: $(d.name)"] = d.qty - have)
     end
 
@@ -210,7 +210,7 @@ function consume(inv::Vector{StockPiece}, tpl::Template, plan)
     for d in tpl.parts                     # remove parts greedily
         n = d.qty
         remaining = filter(remaining) do p
-            take = n > 0 && p.category == :part && p.family in d.families
+            take = n > 0 && p.family in d.families
             take && (n -= 1)
             !take
         end
