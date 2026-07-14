@@ -82,9 +82,12 @@ async function scanPhoto(prompt, imageB64, mediaType) {
         { type: "image", source: { type: "base64", media_type: mediaType, data: imageB64 } },
         { type: "text", text: prompt }] }] })
   });
-  const data = await resp.json();
-  if (data.error) throw new Error(data.error.message || "API error");
-  return (data.content || []).filter(x => x.type === "text").map(x => x.text).join("\n");
+  const data = await resp.json().catch(() => null);
+  if (!data) throw new Error("API returned non-JSON (HTTP " + resp.status + ")");
+  if (data.error) throw new Error("API: " + (data.error.message || JSON.stringify(data.error)).slice(0, 120));
+  const text = (data.content || []).filter(x => x.type === "text").map(x => x.text).join("\n");
+  if (!text) throw new Error("API returned empty content (stop: " + (data.stop_reason || "?") + ")");
+  return text;
 }
 
 // One call, whole scene, mixed known/new. Compact fields so several items fit
@@ -126,13 +129,28 @@ export default function SalvageIntakeKiosk() {
   useEffect(() => { loadState().then(s => { setLib(s.lib); setInv(s.inv); }); }, []);
   const pushLog = (line) => setLog(l => [...l, line]);
 
+  // iPhone photos are 8-12MP HEIC/JPEG, often >5MB — far past API limits.
+  // Downscale + re-encode to JPEG on-device (Safari decodes HEIC natively).
   function onPickFile(e) {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     const reader = new FileReader();
     reader.onload = () => {
-      setImg({ b64: reader.result.split(",")[1], mediaType: f.type || "image/jpeg", url: reader.result });
-      setResults([]); setLog([]);
+      const image = new Image();
+      image.onload = () => {
+        const MAX = 1400;
+        const scale = Math.min(1, MAX / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(image.width * scale);
+        canvas.height = Math.round(image.height * scale);
+        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+        const kb = Math.round((dataUrl.length * 3) / 4 / 1024);
+        setImg({ b64: dataUrl.split(",")[1], mediaType: "image/jpeg", url: dataUrl });
+        setResults([]); setLog(["PHOTO   resized to " + canvas.width + "x" + canvas.height + " (" + kb + " KB) for upload"]);
+      };
+      image.onerror = () => setLog(["ERROR   could not decode this image format — try taking a new photo with the camera"]);
+      image.src = reader.result;
     };
     reader.readAsDataURL(f);
   }
@@ -147,7 +165,8 @@ export default function SalvageIntakeKiosk() {
 
   async function runIntake() {
     if (!img || busy || !lib) return;
-    setBusy(true); setResults([]); setLog([]);
+    setBusy(true); setResults([]);
+    setLog(l => l.filter(x => x.startsWith("PHOTO")));
     let newLib = [...lib]; const newRows = []; const cards = [];
     try {
       pushLog("SCAN    one pass, whole photo, vs " + lib.length + " learned items...");
@@ -158,8 +177,9 @@ export default function SalvageIntakeKiosk() {
           raw = await scanPhoto(scanPrompt(index), img.b64, img.mediaType);
           parsed = repairAndParse(raw);
         } catch (e) {
-          pushLog("SCAN    attempt " + attempt + " unparseable (" + e.message + ")" +
+          pushLog("SCAN    attempt " + attempt + " failed: " + e.message +
                   (attempt === 1 ? " — retrying" : ""));
+          if (raw) pushLog("RAW     " + raw.slice(0, 90).replace(/\n/g, " ") + "...");
         }
       }
       if (!parsed) throw new Error("model output unusable after 2 attempts");
