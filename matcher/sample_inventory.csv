@@ -1,0 +1,13 @@
+id,category,family,description,length_in,width_in,qty,condition
+S01,linear,framing,2x3 SPF stud (deconstruction),92.6,0,14,B
+S02,linear,framing,2x4 SPF full stick,96.0,0,10,B
+S03,linear,framing,2x4 SPF cutoff,72.0,0,6,C
+S04,linear,pallet,1x4 pallet deck board,40.0,0,30,C
+S05,linear,conduit,3/4in EMT conduit,120.0,0,8,A
+S06,sheet,plywood,1/2in CDX plywood,96.0,48.0,3,B
+S07,sheet,osb,7/16 OSB,96.0,48.0,2,C
+S08,sheet,window,single-pane aluminum window,46.0,32.0,2,B
+P01,part,wheel_26,26in bike wheel w/ tire,0,0,2,B
+P02,part,wheel_20,20in bike wheel,0,0,1,C
+P03,part,hinge,3in door hinge,0,0,6,A
+P04,part,tarp,10x12 poly tarp,0,0,1,B
