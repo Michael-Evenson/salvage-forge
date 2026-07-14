@@ -292,15 +292,21 @@ function main(path)
     println("\nSEQUENTIAL BUILD PLAN (consuming inventory):\n")
     pool = inv
     open("cutsheets.txt", "w") do io
-        for (tpl, ok0, _, _) in results
+        for (tpl0, ok0, _, _) in results
             ok0 || continue
-            ok, plan, short = match_template(pool, tpl)
+            tpl, plan, ok = tpl0, nothing, false
+            if startswith(tpl0.name, "Geodesic dome")
+                d = best_dome_radius(pool)          # dome shrinks to fit leftovers
+                d !== nothing && ((r, plan) = d; tpl = dome_3v(r); ok = true)
+            else
+                ok, plan, _ = match_template(pool, tpl0)
+            end
             if ok
                 println("  BUILD: ", tpl.name)
                 print_cutsheet(io, tpl, plan, pool)
                 pool = consume(pool, tpl, plan)
             else
-                println("  SKIP (inventory exhausted): ", tpl.name)
+                println("  SKIP (inventory exhausted): ", tpl0.name)
             end
         end
     end
