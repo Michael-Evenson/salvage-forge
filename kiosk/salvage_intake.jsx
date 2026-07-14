@@ -1,144 +1,129 @@
 import React, { useState, useEffect, useRef } from "react";
 
 // =============================================================================
-// SALVAGE INTAKE KIOSK — photo -> material passport -> inventory row
+// SALVAGE INTAKE KIOSK v0.2 — photo -> material passports -> inventory rows
 //
-// Two-tier learning architecture:
-//   TIER 1 (fast): match photo against the learned passport LIBRARY.
-//           Hit -> stamp "KNOWN ITEM", skip analysis, reuse stored properties.
-//   TIER 2 (deep): full vision analysis -> structured material passport
-//           (dimensions, composition, structural + thermal properties,
-//            hazards, reuse ideas) -> SAVED to library for next time.
-//
-// The library persists across sessions via window.storage.
-// Inventory rows export in the schema matcher.jl expects.
+// v0.2 fixes:
+//  * ONE vision call scans the whole photo and handles MULTIPLE items:
+//    each item either matches the learned library (tier-1 hit) or gets a
+//    full new passport (tier-2) — every unknown item is ALWAYS learned.
+//  * Hardened JSON parsing: fence stripping, smart-quote repair, brace
+//    slicing, and per-object salvage if the response was truncated.
+//  * Honest counters: library size and inventory rows shown separately.
 // =============================================================================
 
-const INK = "#22261F";
-const CONCRETE = "#EBE9E3";
-const PANEL = "#FBFAF7";
-const STEEL = "#35566B";
-const SAFETY = "#F2B60F";
-const GOOD = "#3F7D46";
-const RUST = "#A64B2A";
+const INK = "#22261F", CONCRETE = "#EBE9E3", PANEL = "#FBFAF7";
+const STEEL = "#35566B", SAFETY = "#F2B60F", GOOD = "#3F7D46", RUST = "#A64B2A";
 
-// --- Seed knowledge: common waste-stream items with known properties ---------
 const SEED_LIBRARY = [
-  {
-    id: "seed-mcd-cup",
-    name: "McDonald's cold cup (medium, paper)",
-    keywords: ["mcdonalds cup", "fast food cup", "paper cold cup", "soda cup"],
-    seen: 0,
-    passport: {
-      category: "bulk", family: "coated_paperboard",
-      description: "PE-coated SBS paperboard cold cup, ~21 fl oz",
+  { id: "seed-mcd-cup", name: "McDonald's cold cup (medium, paper)",
+    keywords: ["mcdonalds cup", "fast food cup", "paper cold cup"], seen: 0,
+    passport: { category: "bulk", family: "coated_paperboard",
+      description: "PE-coated SBS paperboard cold cup ~21 fl oz",
       length_in: 5.9, width_in: 3.5, condition: "C",
-      composition: ["~95% solid bleached sulfate paperboard", "~5% LDPE liner (inside)"],
-      structural: "Negligible load capacity; rigid cone geometry; nests densely",
-      thermal: "Paper ignition ~450 F; LDPE liner softens ~220-240 F — not food-safe to reheat",
-      hazards: "LDPE liner complicates composting/repulping; keep out of papercrete slurry unless shredded fine",
-      reuse: ["seed-starter pots", "papercrete feedstock (shredded)", "paint/glue mixing", "insulation void fill (shredded)"]
-    }
-  },
-  {
-    id: "seed-amzn-box",
-    name: "Amazon shipping box (single-wall corrugate)",
-    keywords: ["amazon box", "cardboard box", "shipping box", "corrugated"],
-    seen: 0,
-    passport: {
-      category: "sheet", family: "corrugated",
-      description: "Single-wall C-flute kraft corrugated, ~ECT-32",
+      composition: ["~95% SBS paperboard", "~5% LDPE liner"],
+      structural: "Negligible load capacity; rigid cone; nests densely",
+      thermal: "Paper ignition ~450 F; LDPE softens ~220-240 F",
+      hazards: "LDPE liner complicates composting/repulping",
+      reuse: ["seed-starter pots", "papercrete feedstock", "mixing cups"] } },
+  { id: "seed-amzn-box", name: "Amazon shipping box (single-wall corrugate)",
+    keywords: ["amazon box", "cardboard box", "shipping box"], seen: 0,
+    passport: { category: "sheet", family: "corrugated",
+      description: "Single-wall C-flute kraft corrugated ~ECT-32",
       length_in: 18, width_in: 14, condition: "B",
-      composition: ["kraft linerboard (virgin+recycled fiber)", "starch adhesive", "possible tape/label residue"],
-      structural: "ECT-32: ~32 lb/in edge crush; strong in flute direction; fails wet",
-      thermal: "Ignition ~430-500 F; excellent kindling — fire risk in bulk storage",
-      hazards: "Tape, labels, and staples must be pulled before repulping",
-      reuse: ["sheet-good templates", "concrete form liner", "sheet-mulch gardening", "papercrete/cellulose insulation feedstock"]
-    }
-  },
-  {
-    id: "seed-gma-pallet",
-    name: "GMA wood pallet (48x40)",
-    keywords: ["pallet", "wood pallet", "skid", "gma"],
-    seen: 0,
-    passport: {
-      category: "linear", family: "pallet",
-      description: "Standard 48x40 stringer pallet; ~13-15 deck boards + 3 stringers",
+      composition: ["kraft linerboard", "starch adhesive", "tape residue"],
+      structural: "~32 lb/in edge crush; strong along flutes; fails wet",
+      thermal: "Ignition ~430-500 F; fire risk in bulk storage",
+      hazards: "Pull tape, labels, staples before repulping",
+      reuse: ["templates", "form liner", "sheet mulch", "insulation feedstock"] } },
+  { id: "seed-gma-pallet", name: "GMA wood pallet (48x40)",
+    keywords: ["pallet", "wood pallet", "skid"], seen: 0,
+    passport: { category: "linear", family: "pallet",
+      description: "48x40 stringer pallet; ~13 deck boards + 3 stringers",
       length_in: 40, width_in: 3.5, condition: "C",
-      composition: ["mixed hardwood/softwood (oak, SYP common)", "helical nails"],
-      structural: "~2500 lb static capacity intact; deck boards ~1x4 rough, stringers ~2x4",
-      thermal: "Wood ignition ~572 F; check HT stamp (heat-treated) vs MB (methyl bromide — DO NOT burn or use indoors)",
-      hazards: "MB-stamped pallets are chemically treated; spill-stained pallets may carry unknowns",
-      reuse: ["disassemble to 1x4 stock (see matcher: pallet family)", "skid foundations", "compost bins", "fencing"]
-    }
-  }
+      composition: ["mixed hardwood/softwood", "helical nails"],
+      structural: "~2500 lb static intact; boards ~1x4, stringers ~2x4",
+      thermal: "Wood ignition ~572 F; HT stamp ok, MB stamp = do not burn",
+      hazards: "MB-stamped = chemically treated; avoid stained pallets",
+      reuse: ["1x4 stock for matcher", "skid foundations", "compost bins"] } }
 ];
 
-// --- Claude API helpers ------------------------------------------------------
-async function askClaude(prompt, imageB64, mediaType) {
-  const content = [];
-  if (imageB64) content.push({ type: "image", source: { type: "base64", media_type: mediaType, data: imageB64 } });
-  content.push({ type: "text", text: prompt });
+// --- Hardened JSON extraction -------------------------------------------------
+function repairAndParse(text) {
+  let t = text.replace(/```json|```/g, "")
+              .replace(/[\u201C\u201D]/g, '"').replace(/[\u2018\u2019]/g, "'").trim();
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a === -1) throw new Error("no JSON object in response");
+  if (b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch (e) { /* fall through */ } }
+  // Truncated? Salvage every COMPLETE object inside "items":[ ... ]
+  const start = t.indexOf("[", a);
+  if (start === -1) throw new Error("unparseable response");
+  const items = []; let depth = 0, objStart = -1, inStr = false, esc = false;
+  for (let i = start + 1; i < t.length; i++) {
+    const c = t[i];
+    if (esc) { esc = false; continue; }
+    if (c === "\\") { esc = true; continue; }
+    if (c === '"') inStr = !inStr;
+    if (inStr) continue;
+    if (c === "{") { if (depth === 0) objStart = i; depth++; }
+    if (c === "}") { depth--; if (depth === 0 && objStart >= 0) {
+      try { items.push(JSON.parse(t.slice(objStart, i + 1))); } catch (e) { /* skip bad */ }
+      objStart = -1; } }
+  }
+  if (items.length === 0) throw new Error("no complete items salvageable");
+  return { items, truncated: true };
+}
+
+async function scanPhoto(prompt, imageB64, mediaType) {
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000, messages: [{ role: "user", content }] })
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000,
+      messages: [{ role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: mediaType, data: imageB64 } },
+        { type: "text", text: prompt }] }] })
   });
   const data = await resp.json();
-  const text = (data.content || []).filter(b => b.type === "text").map(b => b.text).join("\n");
-  return JSON.parse(text.replace(/```json|```/g, "").trim());
+  if (data.error) throw new Error(data.error.message || "API error");
+  return (data.content || []).filter(x => x.type === "text").map(x => x.text).join("\n");
 }
 
-const recognizePrompt = (index) => `You are the fast-recognition tier of a salvage intake kiosk.
-Known item library (id :: name :: keywords):
+// One call, whole scene, mixed known/new. Compact fields so several items fit
+// inside the token budget without truncation.
+const scanPrompt = (index) => `You are a salvage-yard intake analyst cataloging waste materials for reuse in construction/fabrication.
+
+KNOWN LIBRARY (id :: name :: keywords):
 ${index.map(e => `${e.id} :: ${e.name} :: ${e.keywords.join(", ")}`).join("\n")}
 
-Look at the photo. If the pictured item is clearly one of the known items above, match it.
-Respond ONLY with JSON, no other text:
-{"match": "<id or null>", "qty": <estimated count of this item in photo>, "condition": "<A|B|C|D>", "note": "<one short line on what you see>"}`;
+Examine the photo. Identify up to 3 distinct salvageable ITEMS (ignore furniture, people, pets, room background). For EACH item output ONE of:
+- If it clearly matches a library entry: {"known":"<library id>","qty":<count>,"condition":"<A|B|C|D>"}
+- Otherwise a NEW passport (estimate dimensions from context; use known manufacturing facts for recognizable items):
+{"name":"<specific name>","keywords":["<3 short keywords>"],"category":"<linear|sheet|part|bulk>","family":"<snake_case material class>","description":"<one short line>","length_in":<n>,"width_in":<n>,"qty":<n>,"condition":"<A-D>","composition":["<=3 short entries"],"structural":"<one short line>","thermal":"<ignition/melt points F, short>","hazards":"<short>","reuse":["<=3 short ideas"],"confidence":"<high|medium|low>"}
 
-const analyzePrompt = `You are the deep-analysis tier of a salvage intake kiosk that catalogs waste
-materials for reuse in construction and fabrication. Analyze the pictured item(s) and produce a
-MATERIAL PASSPORT. Estimate dimensions from visual context. Use known manufacturing facts for
-recognizable branded/standard items. Condition scale: A=like new, B=serviceable, C=worn, D=degraded.
-Category must be one of: linear (sticks/lumber/pipe), sheet (flat goods), part (discrete component),
-bulk (aggregate/feedstock). Family is a short snake_case material class (e.g. framing, conduit,
-plywood, corrugated, hdpe, wheel_26).
-Respond ONLY with JSON, no other text:
-{"name":"<specific item name>","keywords":["<3-5 recognition keywords>"],
-"category":"<linear|sheet|part|bulk>","family":"<snake_case>",
-"description":"<one line>","length_in":<num>,"width_in":<num>,"qty":<num>,"condition":"<A-D>",
-"composition":["<material %s if known>"],
-"structural":"<load/strength characteristics, one line>",
-"thermal":"<ignition/melting/softening points in F, one line>",
-"hazards":"<treatments, coatings, contaminant risks, one line>",
-"reuse":["<3-5 reuse ideas>"],"confidence":"<high|medium|low>"}`;
+Condition: A=like new B=serviceable C=worn D=degraded.
+KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing else:
+{"items":[ ... ]}`;
 
-// --- Storage (batched keys per guidance) --------------------------------------
 async function loadState() {
   let lib = SEED_LIBRARY, inv = [];
-  try { const r = await window.storage.get("library"); if (r) lib = JSON.parse(r.value); }
-  catch (e) { /* first run — seed */ }
-  try { const r = await window.storage.get("inventory"); if (r) inv = JSON.parse(r.value); }
-  catch (e) { /* first run */ }
+  try { const r = await window.storage.get("library"); if (r) lib = JSON.parse(r.value); } catch (e) {}
+  try { const r = await window.storage.get("inventory"); if (r) inv = JSON.parse(r.value); } catch (e) {}
   return { lib, inv };
 }
-async function saveLib(lib) { try { await window.storage.set("library", JSON.stringify(lib)); } catch (e) { console.error(e); } }
-async function saveInv(inv) { try { await window.storage.set("inventory", JSON.stringify(inv)); } catch (e) { console.error(e); } }
+const saveLib = (lib) => window.storage.set("library", JSON.stringify(lib)).catch(console.error);
+const saveInv = (inv) => window.storage.set("inventory", JSON.stringify(inv)).catch(console.error);
 
 // =============================================================================
 export default function SalvageIntakeKiosk() {
   const [lib, setLib] = useState(null);
   const [inv, setInv] = useState([]);
-  const [img, setImg] = useState(null);          // {b64, mediaType, url}
+  const [img, setImg] = useState(null);
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState([]);
-  const [result, setResult] = useState(null);    // {passport, tier, stampSeen}
+  const [results, setResults] = useState([]);
   const [tab, setTab] = useState("intake");
   const fileRef = useRef(null);
 
-  useEffect(() => { loadState().then(({ lib, inv }) => { setLib(lib); setInv(inv); }); }, []);
-
+  useEffect(() => { loadState().then(s => { setLib(s.lib); setInv(s.inv); }); }, []);
   const pushLog = (line) => setLog(l => [...l, line]);
 
   function onPickFile(e) {
@@ -147,64 +132,75 @@ export default function SalvageIntakeKiosk() {
     const reader = new FileReader();
     reader.onload = () => {
       setImg({ b64: reader.result.split(",")[1], mediaType: f.type || "image/jpeg", url: reader.result });
-      setResult(null); setLog([]);
+      setResults([]); setLog([]);
     };
     reader.readAsDataURL(f);
   }
 
+  function mkRow(p) {
+    return { id: "K" + String(Date.now() + Math.floor(Math.random() * 999)).slice(-6),
+      category: p.category || "part", family: p.family || "misc",
+      description: (p.description || p.name || "item").replace(/,/g, ";"),
+      length_in: p.length_in || 0, width_in: p.width_in || 0,
+      qty: p.qty || 1, condition: p.condition || "C" };
+  }
+
   async function runIntake() {
     if (!img || busy || !lib) return;
-    setBusy(true); setResult(null); setLog([]);
+    setBusy(true); setResults([]); setLog([]);
+    let newLib = [...lib]; const newRows = []; const cards = [];
     try {
-      // ---- TIER 1: recognition against learned library ----
-      pushLog("TIER 1  checking " + lib.length + " learned items...");
-      const index = lib.map(e => ({ id: e.id, name: e.name, keywords: e.keywords }));
-      let rec = null;
-      try { rec = await askClaude(recognizePrompt(index), img.b64, img.mediaType); }
-      catch (e) { pushLog("TIER 1  parse issue — falling through to analysis"); }
-
-      if (rec && rec.match && lib.some(e => e.id === rec.match)) {
-        const entry = lib.find(e => e.id === rec.match);
-        pushLog("TIER 1  HIT: " + entry.name);
-        pushLog("TIER 2  skipped — properties recalled from library");
-        const newLib = lib.map(e => e.id === entry.id ? { ...e, seen: (e.seen || 0) + 1 } : e);
-        setLib(newLib); await saveLib(newLib);
-        const p = { ...entry.passport, qty: rec.qty || 1, condition: rec.condition || entry.passport.condition, name: entry.name };
-        addInventoryRow(p);
-        setResult({ passport: p, tier: 1, seen: (entry.seen || 0) + 1, note: rec.note });
-      } else {
-        // ---- TIER 2: deep analysis, then LEARN ----
-        pushLog("TIER 1  no match — new item");
-        pushLog("TIER 2  running full material analysis...");
-        const p = await askClaude(analyzePrompt, img.b64, img.mediaType);
-        const id = "learned-" + Date.now();
-        const entry = { id, name: p.name, keywords: p.keywords || [], seen: 1, passport: p };
-        const newLib = [...lib, entry];
-        setLib(newLib); await saveLib(newLib);
-        pushLog("LEARNED  passport saved — next intake of this item skips analysis");
-        addInventoryRow(p);
-        setResult({ passport: p, tier: 2, seen: 1 });
+      pushLog("SCAN    one pass, whole photo, vs " + lib.length + " learned items...");
+      const index = newLib.map(e => ({ id: e.id, name: e.name, keywords: e.keywords }));
+      let parsed = null, raw = "";
+      for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+        try {
+          raw = await scanPhoto(scanPrompt(index), img.b64, img.mediaType);
+          parsed = repairAndParse(raw);
+        } catch (e) {
+          pushLog("SCAN    attempt " + attempt + " unparseable (" + e.message + ")" +
+                  (attempt === 1 ? " — retrying" : ""));
+        }
       }
+      if (!parsed) throw new Error("model output unusable after 2 attempts");
+      if (parsed.truncated) pushLog("NOTE    response truncated — salvaged complete items only");
+      const items = Array.isArray(parsed.items) ? parsed.items : [parsed];
+      pushLog("SCAN    found " + items.length + " item(s)");
+
+      for (const it of items) {
+        if (it.known && newLib.some(e => e.id === it.known)) {
+          // ---- tier-1 hit: recall, don't re-analyze ----
+          const entry = newLib.find(e => e.id === it.known);
+          entry.seen = (entry.seen || 0) + 1;
+          const p = { ...entry.passport, name: entry.name,
+                      qty: it.qty || 1, condition: it.condition || entry.passport.condition };
+          newRows.push(mkRow(p));
+          cards.push({ passport: p, tier: 1, seen: entry.seen });
+          pushLog("KNOWN   " + entry.name + " (seen " + entry.seen + "x) — analysis skipped");
+        } else if (it.name) {
+          // ---- tier-2: new item, ALWAYS learned ----
+          const id = "learned-" + Date.now() + "-" + Math.floor(Math.random() * 999);
+          newLib.push({ id, name: it.name, keywords: it.keywords || [], seen: 1, passport: it });
+          newRows.push(mkRow(it));
+          cards.push({ passport: it, tier: 2, seen: 1 });
+          pushLog("LEARNED " + it.name + " — new library entry created");
+        }
+      }
+      if (cards.length === 0) pushLog("EMPTY   no salvageable items identified in photo");
+      setLib(newLib); saveLib(newLib);
+      const nextInv = [...inv, ...newRows];
+      setInv(nextInv); saveInv(nextInv);
+      setResults(cards);
+      if (newRows.length) pushLog("DONE    " + newRows.length + " row(s) added to inventory");
     } catch (e) {
-      pushLog("ERROR  " + (e.message || "analysis failed") + " — try another photo");
+      pushLog("ERROR   " + (e.message || "intake failed") + " — nothing was saved");
     }
     setBusy(false);
   }
 
-  async function addInventoryRow(p) {
-    const row = {
-      id: "K" + String(Date.now()).slice(-6),
-      category: p.category || "part", family: p.family || "misc",
-      description: (p.description || p.name || "item").replace(/,/g, ";"),
-      length_in: p.length_in || 0, width_in: p.width_in || 0,
-      qty: p.qty || 1, condition: p.condition || "C"
-    };
-    setInv(prev => { const next = [...prev, row]; saveInv(next); return next; });
-  }
-
   async function resetLibrary() {
-    setLib(SEED_LIBRARY); setInv([]); setResult(null); setLog([]);
-    await saveLib(SEED_LIBRARY); await saveInv([]);
+    setLib(SEED_LIBRARY); setInv([]); setResults([]); setLog([]);
+    saveLib(SEED_LIBRARY); saveInv([]);
   }
 
   const csv = ["id,category,family,description,length_in,width_in,qty,condition",
@@ -212,7 +208,6 @@ export default function SalvageIntakeKiosk() {
 
   if (!lib) return <div style={{ fontFamily: "IBM Plex Mono, monospace", padding: 40, color: INK }}>Opening the scale house...</div>;
 
-  // ---------------------------------------------------------------------------
   return (
     <div style={{ minHeight: "100vh", background: CONCRETE, color: INK, fontFamily: "'IBM Plex Sans', system-ui, sans-serif" }}>
       <style>{`
@@ -223,33 +218,28 @@ export default function SalvageIntakeKiosk() {
         .tabbtn:focus-visible, .actbtn:focus-visible { outline: 3px solid ${SAFETY}; outline-offset: 2px; }
       `}</style>
 
-      {/* Header: hazard-stripe rule is the visual vocabulary of a materials yard */}
       <header style={{ background: INK, color: PANEL, padding: "14px 20px 12px" }}>
         <div style={{ fontFamily: "'Saira Condensed'", fontWeight: 800, fontSize: 30, letterSpacing: 1, lineHeight: 1 }}>
           SALVAGE INTAKE <span style={{ color: SAFETY }}>KIOSK</span>
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .75, marginTop: 3 }}>
-          photo in / material passport out — {lib.length} items learned
+          library {lib.length} items · inventory {inv.length} rows
         </div>
       </header>
       <div style={{ height: 8, background: `repeating-linear-gradient(-45deg, ${SAFETY} 0 12px, ${INK} 12px 24px)` }} />
 
-      {/* Tabs */}
       <nav style={{ display: "flex", gap: 6, padding: "12px 16px 0" }}>
         {["intake", "library", "inventory"].map(t => (
           <button key={t} className="tabbtn" onClick={() => setTab(t)}
             style={{ fontFamily: "'Saira Condensed'", fontWeight: 600, fontSize: 15, letterSpacing: 1, textTransform: "uppercase",
                      padding: "8px 16px", border: `2px solid ${INK}`, borderBottom: "none", cursor: "pointer",
-                     background: tab === t ? PANEL : "transparent", color: INK,
-                     borderRadius: "6px 6px 0 0" }}>
-            {t}{t === "inventory" && inv.length ? ` (${inv.length})` : ""}
+                     background: tab === t ? PANEL : "transparent", color: INK, borderRadius: "6px 6px 0 0" }}>
+            {t}{t === "library" ? ` (${lib.length})` : ""}{t === "inventory" ? ` (${inv.length})` : ""}
           </button>
         ))}
       </nav>
 
       <main style={{ background: PANEL, border: `2px solid ${INK}`, margin: "0 16px 24px", padding: 16, borderRadius: "0 6px 6px 6px" }}>
-
-        {/* ============ INTAKE ============ */}
         {tab === "intake" && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
             <section>
@@ -264,34 +254,35 @@ export default function SalvageIntakeKiosk() {
                 style={{ ...bigBtn, marginTop: 10, background: !img || busy ? CONCRETE : INK, color: !img || busy ? "#999" : PANEL }}>
                 {busy ? "Working..." : "2 · Run intake"}
               </button>
+              <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10.5, opacity: .55, marginTop: 6 }}>
+                Handles up to 3 distinct items per photo. Every new item is learned.
+              </div>
               {log.length > 0 && (
                 <pre style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11.5, background: INK, color: "#CFE3B8", padding: 10, borderRadius: 4, marginTop: 10, whiteSpace: "pre-wrap" }}>
                   {log.join("\n")}
                 </pre>
               )}
             </section>
-
             <section>
-              <h2 style={h2s}>Material passport</h2>
-              {!result && <div style={{ fontSize: 13, opacity: .6, padding: "30px 10px", textAlign: "center", border: `2px dashed ${INK}30`, borderRadius: 4 }}>
-                The passport prints here.<br />Known items skip straight through — that's the learning.</div>}
-              {result && <Passport r={result} />}
+              <h2 style={h2s}>Material passports</h2>
+              {results.length === 0 && <div style={{ fontSize: 13, opacity: .6, padding: "30px 10px", textAlign: "center", border: `2px dashed ${INK}30`, borderRadius: 4 }}>
+                Passports print here — one per item found.<br />Known items skip straight through; that's the learning.</div>}
+              {results.map((r, i) => <div key={i} style={{ marginBottom: 12 }}><Passport r={r} /></div>)}
             </section>
           </div>
         )}
 
-        {/* ============ LIBRARY ============ */}
         {tab === "library" && (
           <div>
-            <h2 style={h2s}>Learned items — Tier-1 recognition skips analysis for these</h2>
+            <h2 style={h2s}>Learned items — recognized on sight, analysis skipped</h2>
             {lib.map(e => (
               <div key={e.id} style={{ border: `2px solid ${INK}`, borderRadius: 4, padding: "10px 12px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>{e.name}</div>
-                  <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .65 }}>{e.passport.family} · {e.passport.category} · {e.keywords.slice(0, 3).join(" / ")}</div>
+                  <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .65 }}>{(e.passport.family || "?")} · {(e.passport.category || "?")} · {(e.keywords || []).slice(0, 3).join(" / ")}</div>
                 </div>
                 <div style={{ fontFamily: "'Saira Condensed'", fontWeight: 800, fontSize: 18, color: e.seen ? STEEL : "#999" }}>
-                  {e.seen || 0}× seen{e.id.startsWith("seed") ? " · seeded" : " · learned"}
+                  {e.seen || 0}x seen · {e.id.startsWith("seed") ? "seeded" : "learned"}
                 </div>
               </div>
             ))}
@@ -301,11 +292,10 @@ export default function SalvageIntakeKiosk() {
           </div>
         )}
 
-        {/* ============ INVENTORY ============ */}
         {tab === "inventory" && (
           <div>
             <h2 style={h2s}>Inventory rows — paste into matcher.jl's inventory.csv</h2>
-            {inv.length === 0 && <div style={{ fontSize: 13, opacity: .6 }}>No intakes yet. Every passport adds a row here.</div>}
+            {inv.length === 0 && <div style={{ fontSize: 13, opacity: .6 }}>No rows yet. Every passport printed on the intake tab adds one row here automatically.</div>}
             {inv.length > 0 && <>
               <pre style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11.5, background: INK, color: PANEL, padding: 10, borderRadius: 4, overflowX: "auto" }}>{csv}</pre>
               <button className="actbtn" onClick={() => navigator.clipboard && navigator.clipboard.writeText(csv)} style={{ ...bigBtn, background: SAFETY }}>
@@ -319,12 +309,11 @@ export default function SalvageIntakeKiosk() {
   );
 }
 
-// --- Passport card (the signature element) -----------------------------------
 function Passport({ r }) {
   const p = r.passport;
   const rows = [
-    ["Class", `${p.category} / ${p.family}`],
-    ["Size", `${p.length_in || "?"}" x ${p.width_in || "?"}" · qty ${p.qty || 1} · grade ${p.condition}`],
+    ["Class", `${p.category || "?"} / ${p.family || "?"}`],
+    ["Size", `${p.length_in || "?"}" x ${p.width_in || "?"}" · qty ${p.qty || 1} · grade ${p.condition || "?"}`],
     ["Composition", (p.composition || []).join(" · ")],
     ["Structural", p.structural],
     ["Thermal", p.thermal],
@@ -345,10 +334,10 @@ function Passport({ r }) {
         border: `3px double ${r.tier === 1 ? GOOD : RUST}`, color: r.tier === 1 ? GOOD : RUST,
         fontFamily: "'Saira Condensed'", fontWeight: 800, fontSize: 13, lineHeight: 1.15,
         padding: "4px 8px", borderRadius: 3, textAlign: "center", background: "#FFFDF690" }}>
-        {r.tier === 1 ? <>KNOWN ITEM<br />ANALYSIS SKIPPED<br />seen {r.seen}×</> : <>NEW ITEM<br />ANALYZED + LEARNED</>}
+        {r.tier === 1 ? <>KNOWN ITEM<br />ANALYSIS SKIPPED<br />seen {r.seen}x</> : <>NEW ITEM<br />ANALYZED + LEARNED</>}
       </div>
       <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10.5, marginTop: 8, opacity: .6 }}>
-        Row added to inventory. {p.confidence ? `Analysis confidence: ${p.confidence}. ` : ""}Dimensions are visual estimates — tape-check structural stock.
+        Row added to inventory. {p.confidence ? `Confidence: ${p.confidence}. ` : ""}Dimensions are visual estimates — tape-check structural stock.
       </div>
     </div>
   );
