@@ -86,6 +86,13 @@ Examine the photo. Identify up to 3 distinct salvageable ITEMS (ignore furniture
 
 Value tiers: scrap = feedstock only; reuse = useful as building material; resale = sellable as-is (unused/sealed/branded goods). Unopened packaging or shrink wrap suggests grade A and possible resale tier.
 
+EPISTEMIC RULES — follow strictly:
+1. Name items by what is VISIBLE, not assumed identity. If purpose/product is ambiguous, use a descriptive name and put specific guesses in "could_be".
+2. All dimensions are ROUGH ESTIMATES; state your size reference in "dims_note". Never present exact dimensions as fact.
+3. Never claim what you cannot see: package contents, spool footage, hidden faces, exact counts.
+4. If identity or size is materially uncertain, fill "ask" with the ONE question or photo angle that would resolve it.
+Extra fields per NEW passport: "id_basis":"...","could_be":["<=2"],"dims_note":"...","ask":"..."
+
 Condition: A=like new B=serviceable C=worn D=degraded.
 KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing else:
 {{"items":[ ... ]}}"""
@@ -172,7 +179,8 @@ def show_passport(p, tier, seen):
     if p.get("value_tier") == "resale":
         stamp += "  ** HIGH VALUE — HOLD FOR RESALE/CREDIT **"
     print(f"\n  ┌─ {p.get('name','?')}  [{stamp}]")
-    for k in ("description", "composition", "structural", "thermal", "hazards", "reuse"):
+    for k in ("description", "id_basis", "could_be", "dims_note", "ask",
+              "composition", "structural", "thermal", "hazards", "reuse"):
         v = p.get(k)
         if isinstance(v, list): v = " · ".join(str(x) for x in v)
         if v: print(f"  │ {k:<12} {v}")
