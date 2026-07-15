@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useRef } from "react";
 
 // =============================================================================
-// SALVAGE INTAKE KIOSK v0.2 — photo -> material passports -> inventory rows
+// SALVAGE INTAKE KIOSK v0.4 — photo -> material passports -> inventory rows
 //
-// v0.2 fixes:
-//  * ONE vision call scans the whole photo and handles MULTIPLE items:
-//    each item either matches the learned library (tier-1 hit) or gets a
-//    full new passport (tier-2) — every unknown item is ALWAYS learned.
-//  * Hardened JSON parsing: fence stripping, smart-quote repair, brace
-//    slicing, and per-object salvage if the response was truncated.
-//  * Honest counters: library size and inventory rows shown separately.
+// v0.4: instrumented. The bridge between artifacts and the API was rejecting
+// calls with an opaque error, so this version can diagnose itself:
+//  * CONNECTION TEST button: (1) text-only ping (2) tiny 64px image ping —
+//    isolates whether text calls, image calls, or everything is failing.
+//  * Errors are labeled by layer: BRIDGE (fetch threw), API (server said no),
+//    EMPTY (no content), PARSE (bad JSON — raw snippet logged).
+//  * Adaptive upload: tries the photo at 1400px, then 900px, then 600px.
 // =============================================================================
 
 const INK = "#22261F", CONCRETE = "#EBE9E3", PANEL = "#FBFAF7";
@@ -55,7 +55,6 @@ function repairAndParse(text) {
   const a = t.indexOf("{"), b = t.lastIndexOf("}");
   if (a === -1) throw new Error("no JSON object in response");
   if (b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch (e) { /* fall through */ } }
-  // Truncated? Salvage every COMPLETE object inside "items":[ ... ]
   const start = t.indexOf("[", a);
   if (start === -1) throw new Error("unparseable response");
   const items = []; let depth = 0, objStart = -1, inStr = false, esc = false;
@@ -67,31 +66,58 @@ function repairAndParse(text) {
     if (inStr) continue;
     if (c === "{") { if (depth === 0) objStart = i; depth++; }
     if (c === "}") { depth--; if (depth === 0 && objStart >= 0) {
-      try { items.push(JSON.parse(t.slice(objStart, i + 1))); } catch (e) { /* skip bad */ }
+      try { items.push(JSON.parse(t.slice(objStart, i + 1))); } catch (e) { /* skip */ }
       objStart = -1; } }
   }
   if (items.length === 0) throw new Error("no complete items salvageable");
   return { items, truncated: true };
 }
 
-async function scanPhoto(prompt, imageB64, mediaType) {
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000,
-      messages: [{ role: "user", content: [
-        { type: "image", source: { type: "base64", media_type: mediaType, data: imageB64 } },
-        { type: "text", text: prompt }] }] })
-  });
-  const data = await resp.json().catch(() => null);
-  if (!data) throw new Error("API returned non-JSON (HTTP " + resp.status + ")");
-  if (data.error) throw new Error("API: " + (data.error.message || JSON.stringify(data.error)).slice(0, 120));
+// --- API call with layer-labeled errors ---------------------------------------
+async function callClaude(promptText, imageB64) {
+  const content = [];
+  if (imageB64) content.push({ type: "image",
+    source: { type: "base64", media_type: "image/jpeg", data: imageB64 } });
+  content.push({ type: "text", text: promptText });
+  let resp;
+  try {
+    resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "claude-sonnet-4-6", max_tokens: 1000,
+        messages: [{ role: "user", content }] })
+    });
+  } catch (err) {
+    throw new Error("BRIDGE: fetch threw \"" + (err && err.message ? err.message : err) + "\"");
+  }
+  let data = null;
+  try { data = await resp.json(); }
+  catch (e) { throw new Error("API: non-JSON body, HTTP " + resp.status); }
+  if (data.error) throw new Error("API: " +
+    ((data.error.message || JSON.stringify(data.error)) + "").slice(0, 140));
   const text = (data.content || []).filter(x => x.type === "text").map(x => x.text).join("\n");
-  if (!text) throw new Error("API returned empty content (stop: " + (data.stop_reason || "?") + ")");
+  if (!text) throw new Error("EMPTY: no text content, stop_reason=" + (data.stop_reason || "?"));
   return text;
 }
 
-// One call, whole scene, mixed known/new. Compact fields so several items fit
-// inside the token budget without truncation.
+// Re-encode a dataURL image at a given max dimension.
+function encodeAt(srcDataUrl, maxPx, quality) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, maxPx / Math.max(image.width, image.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(image.width * scale);
+      c.height = Math.round(image.height * scale);
+      c.getContext("2d").drawImage(image, 0, 0, c.width, c.height);
+      const dataUrl = c.toDataURL("image/jpeg", quality);
+      resolve({ b64: dataUrl.split(",")[1], url: dataUrl, w: c.width, h: c.height,
+                kb: Math.round((dataUrl.length * 3) / 4 / 1024) });
+    };
+    image.onerror = () => reject(new Error("could not decode image"));
+    image.src = srcDataUrl;
+  });
+}
+
 const scanPrompt = (index) => `You are a salvage-yard intake analyst cataloging waste materials for reuse in construction/fabrication.
 
 KNOWN LIBRARY (id :: name :: keywords):
@@ -129,28 +155,18 @@ export default function SalvageIntakeKiosk() {
   useEffect(() => { loadState().then(s => { setLib(s.lib); setInv(s.inv); }); }, []);
   const pushLog = (line) => setLog(l => [...l, line]);
 
-  // iPhone photos are 8-12MP HEIC/JPEG, often >5MB — far past API limits.
-  // Downscale + re-encode to JPEG on-device (Safari decodes HEIC natively).
-  function onPickFile(e) {
+  async function onPickFile(e) {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
     const reader = new FileReader();
-    reader.onload = () => {
-      const image = new Image();
-      image.onload = () => {
-        const MAX = 1400;
-        const scale = Math.min(1, MAX / Math.max(image.width, image.height));
-        const canvas = document.createElement("canvas");
-        canvas.width = Math.round(image.width * scale);
-        canvas.height = Math.round(image.height * scale);
-        canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
-        const kb = Math.round((dataUrl.length * 3) / 4 / 1024);
-        setImg({ b64: dataUrl.split(",")[1], mediaType: "image/jpeg", url: dataUrl });
-        setResults([]); setLog(["PHOTO   resized to " + canvas.width + "x" + canvas.height + " (" + kb + " KB) for upload"]);
-      };
-      image.onerror = () => setLog(["ERROR   could not decode this image format — try taking a new photo with the camera"]);
-      image.src = reader.result;
+    reader.onload = async () => {
+      try {
+        const enc = await encodeAt(reader.result, 1400, 0.82);
+        setImg(enc); setResults([]);
+        setLog(["PHOTO   ready at " + enc.w + "x" + enc.h + " (" + enc.kb + " KB)"]);
+      } catch (err) {
+        setLog(["ERROR   " + err.message + " — try the camera instead of the photo library"]);
+      }
     };
     reader.readAsDataURL(f);
   }
@@ -163,33 +179,61 @@ export default function SalvageIntakeKiosk() {
       qty: p.qty || 1, condition: p.condition || "C" };
   }
 
+  // --- Connection self-test: isolates which layer is broken -------------------
+  async function runSelfTest() {
+    if (busy) return;
+    setBusy(true); setResults([]); setLog(["TEST    1/2 text-only API call..."]);
+    try {
+      const t = await callClaude('Reply with exactly: {"ok":true}', null);
+      pushLog("TEST    1/2 PASS — got: " + t.slice(0, 40));
+    } catch (e) { pushLog("TEST    1/2 FAIL — " + e.message); }
+    pushLog("TEST    2/2 tiny 64px image call...");
+    try {
+      const c = document.createElement("canvas"); c.width = 64; c.height = 64;
+      const g = c.getContext("2d"); g.fillStyle = "#F2B60F"; g.fillRect(0, 0, 64, 64);
+      const b64 = c.toDataURL("image/jpeg", 0.9).split(",")[1];
+      const t = await callClaude('One word: what color is this square?', b64);
+      pushLog("TEST    2/2 PASS — got: " + t.slice(0, 40));
+      pushLog("VERDICT image calls work — full intake should succeed");
+    } catch (e) {
+      pushLog("TEST    2/2 FAIL — " + e.message);
+      pushLog("VERDICT screenshot this log for debugging");
+    }
+    setBusy(false);
+  }
+
   async function runIntake() {
     if (!img || busy || !lib) return;
     setBusy(true); setResults([]);
     setLog(l => l.filter(x => x.startsWith("PHOTO")));
     let newLib = [...lib]; const newRows = []; const cards = [];
     try {
-      pushLog("SCAN    one pass, whole photo, vs " + lib.length + " learned items...");
       const index = newLib.map(e => ({ id: e.id, name: e.name, keywords: e.keywords }));
       let parsed = null, raw = "";
-      for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
-        try {
-          raw = await scanPhoto(scanPrompt(index), img.b64, img.mediaType);
-          parsed = repairAndParse(raw);
-        } catch (e) {
-          pushLog("SCAN    attempt " + attempt + " failed: " + e.message +
-                  (attempt === 1 ? " — retrying" : ""));
-          if (raw) pushLog("RAW     " + raw.slice(0, 90).replace(/\n/g, " ") + "...");
+      for (const maxPx of [1400, 900, 600]) {           // adaptive size ladder
+        let enc;
+        try { enc = await encodeAt(img.url, maxPx, 0.75); }
+        catch (e) { pushLog("ENCODE  failed at " + maxPx + "px"); continue; }
+        pushLog("SEND    " + enc.w + "x" + enc.h + " (" + enc.kb + " KB) vs " + newLib.length + " learned items");
+        try { raw = await callClaude(scanPrompt(index), enc.b64); }
+        catch (e) { pushLog("FAIL    " + e.message); continue; }   // transport-level: shrink & retry
+        try { parsed = repairAndParse(raw); break; }
+        catch (e) {                                                 // content-level: one strict re-ask
+          pushLog("PARSE   " + e.message);
+          pushLog("RAW     " + raw.slice(0, 90).replace(/\n/g, " "));
+          try {
+            raw = await callClaude(scanPrompt(index) + "\n\nIMPORTANT: your previous attempt was not valid JSON. Output ONLY the JSON object.", enc.b64);
+            parsed = repairAndParse(raw); break;
+          } catch (e2) { pushLog("RETRY   " + e2.message); }
         }
       }
-      if (!parsed) throw new Error("model output unusable after 2 attempts");
+      if (!parsed) throw new Error("all attempts failed — run the connection test below");
       if (parsed.truncated) pushLog("NOTE    response truncated — salvaged complete items only");
       const items = Array.isArray(parsed.items) ? parsed.items : [parsed];
       pushLog("SCAN    found " + items.length + " item(s)");
 
       for (const it of items) {
         if (it.known && newLib.some(e => e.id === it.known)) {
-          // ---- tier-1 hit: recall, don't re-analyze ----
           const entry = newLib.find(e => e.id === it.known);
           entry.seen = (entry.seen || 0) + 1;
           const p = { ...entry.passport, name: entry.name,
@@ -198,7 +242,6 @@ export default function SalvageIntakeKiosk() {
           cards.push({ passport: p, tier: 1, seen: entry.seen });
           pushLog("KNOWN   " + entry.name + " (seen " + entry.seen + "x) — analysis skipped");
         } else if (it.name) {
-          // ---- tier-2: new item, ALWAYS learned ----
           const id = "learned-" + Date.now() + "-" + Math.floor(Math.random() * 999);
           newLib.push({ id, name: it.name, keywords: it.keywords || [], seen: 1, passport: it });
           newRows.push(mkRow(it));
@@ -243,7 +286,7 @@ export default function SalvageIntakeKiosk() {
           SALVAGE INTAKE <span style={{ color: SAFETY }}>KIOSK</span>
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .75, marginTop: 3 }}>
-          library {lib.length} items · inventory {inv.length} rows
+          library {lib.length} items · inventory {inv.length} rows · v0.4
         </div>
       </header>
       <div style={{ height: 8, background: `repeating-linear-gradient(-45deg, ${SAFETY} 0 12px, ${INK} 12px 24px)` }} />
@@ -274,9 +317,10 @@ export default function SalvageIntakeKiosk() {
                 style={{ ...bigBtn, marginTop: 10, background: !img || busy ? CONCRETE : INK, color: !img || busy ? "#999" : PANEL }}>
                 {busy ? "Working..." : "2 · Run intake"}
               </button>
-              <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10.5, opacity: .55, marginTop: 6 }}>
-                Handles up to 3 distinct items per photo. Every new item is learned.
-              </div>
+              <button className="actbtn" onClick={runSelfTest} disabled={busy}
+                style={{ ...bigBtn, marginTop: 8, background: PANEL, borderColor: STEEL, color: STEEL, fontSize: 13 }}>
+                Run connection test
+              </button>
               {log.length > 0 && (
                 <pre style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11.5, background: INK, color: "#CFE3B8", padding: 10, borderRadius: 4, marginTop: 10, whiteSpace: "pre-wrap" }}>
                   {log.join("\n")}
