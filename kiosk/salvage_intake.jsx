@@ -123,7 +123,8 @@ const scanPrompt = (index) => `You are a salvage-yard intake analyst cataloging 
 KNOWN LIBRARY (id :: name :: keywords):
 ${index.map(e => `${e.id} :: ${e.name} :: ${e.keywords.join(", ")}`).join("\n")}
 
-Examine the photo. Identify up to 4 distinct salvageable ITEMS (ignore furniture, people, pets, room background). Two objects of the same material but different form are SEPARATE items — e.g. a flattened/folded sheet leaning against an intact box is 2 items. Count physical objects, not material types. For EACH item output ONE of:
+Examine the photo. Identify up to 5 distinct salvageable ITEMS. EVERYTHING physical is inventory: furniture, cushions/pillows, textiles, containers, materials. Ignore ONLY people, pets, and fixed building elements (walls, floors, windows, built-ins).
+SEPARATION RULE: count physical objects, not material types. Same-material objects in different forms are SEPARATE items — e.g. a folded/flattened corrugated sheet leaning against an intact box = 2 items, never 1. Multiple similar pillows may be 1 item with qty>1. For EACH item output ONE of:
 - If it clearly matches a library entry: {"known":"<library id>","qty":<count>,"condition":"<A|B|C|D>"}
 - Otherwise a NEW passport (estimate dimensions from context; use known manufacturing facts for recognizable items):
 {"name":"<specific name>","keywords":["<3 short keywords>"],"category":"<linear|sheet|part|bulk>","family":"<snake_case material class>","description":"<one short line>","length_in":<n>,"width_in":<n>,"qty":<n>,"condition":"<A-D>","composition":["<=3 short entries"],"structural":"<one short line>","thermal":"<ignition/melt points F, short>","hazards":"<short>","reuse":["<=3 short ideas"],"confidence":"<high|medium|low>"}
@@ -136,9 +137,10 @@ EPISTEMIC RULES — follow strictly:
 3. Never claim what you cannot see: contents of packaging, total length on a spool, hidden faces, exact counts.
 4. If identity or size is materially uncertain, fill "ask" with the ONE question or photo angle that would resolve it.
 Extra fields for each NEW passport: "observed":["<=4 short concrete facts directly visible in the photo"],"id_basis":"<visible evidence for the name>","could_be":["<=2 alternates"],"dims_note":"<size reference used>","ask":"<question or empty>"
-Note: composition/structural/thermal/hazards are material-class knowledge, not observations — they will be shown to the user as estimates.
+Also add a DISASSEMBLY estimate per item: "breakdown":{"can":"<yes|partial|no>","into":["<=4 component materials/pieces"],"tools":["<=3 tools or techniques to separate"]}
+Note: composition/structural/thermal/hazards/breakdown are material-class knowledge, not observations — they will be shown to the user as estimates.
 
-KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing else:
+KEEP EVERY STRING UNDER 80 CHARACTERS. Respond with ONLY this JSON, nothing else:
 {"items":[ ... ]}`;
 
 async function loadState() {
@@ -304,7 +306,7 @@ export default function SalvageIntakeKiosk() {
           SALVAGE INTAKE <span style={{ color: SAFETY }}>KIOSK</span>
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .75, marginTop: 3 }}>
-          library {lib.length} items · inventory {inv.length} rows · v0.7
+          library {lib.length} items · inventory {inv.length} rows · v0.8
         </div>
       </header>
       <div style={{ height: 8, background: `repeating-linear-gradient(-45deg, ${SAFETY} 0 12px, ${INK} 12px 24px)` }} />
@@ -344,15 +346,16 @@ export default function SalvageIntakeKiosk() {
                 style={{ ...bigBtn, marginTop: 10, background: !img || busy ? CONCRETE : INK, color: !img || busy ? "#999" : PANEL }}>
                 {busy ? "Working..." : "2 · Run intake"}
               </button>
-              <button className="actbtn" onClick={runSelfTest} disabled={busy}
-                style={{ ...bigBtn, marginTop: 8, background: PANEL, borderColor: STEEL, color: STEEL, fontSize: 13 }}>
-                Run connection test
-              </button>
+
               {log.length > 0 && (
                 <pre style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11.5, background: INK, color: "#CFE3B8", padding: 10, borderRadius: 4, marginTop: 10, whiteSpace: "pre-wrap" }}>
                   {log.join("\n")}
                 </pre>
               )}
+              <button className="actbtn" onClick={runSelfTest} disabled={busy}
+                style={{ background: "transparent", border: "none", color: STEEL, fontFamily: "'IBM Plex Mono'", fontSize: 10.5, textDecoration: "underline", cursor: "pointer", marginTop: 8, padding: 2 }}>
+                diagnostics: run connection test
+              </button>
             </section>
             <section>
               <h2 style={h2s}>Material passports</h2>
@@ -454,6 +457,9 @@ function Passport({ r }) {
         <Row k="Hazards" v={p.hazards} />
         <Row k="Reuse" v={p.reuse} />
         <Row k="Value" v={p.value_tier ? p.value_tier + (p.est_value_usd ? ` · est $${p.est_value_usd}` : "") : null} />
+        <Row k="Break down" v={p.breakdown ? p.breakdown.can : null} />
+        <Row k="Into" v={p.breakdown ? p.breakdown.into : null} />
+        <Row k="Tools" v={p.breakdown ? p.breakdown.tools : null} />
       </Band>
 
       {p.ask && (
