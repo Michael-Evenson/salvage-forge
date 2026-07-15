@@ -82,7 +82,9 @@ KNOWN LIBRARY (id :: name :: keywords):
 Examine the photo. Identify up to 3 distinct salvageable ITEMS (ignore furniture, people, pets, background). For EACH item output ONE of:
 - If it clearly matches a library entry: {{"known":"<library id>","qty":<count>,"condition":"<A|B|C|D>"}}
 - Otherwise a NEW passport (estimate dimensions from context; use known manufacturing facts for recognizable items):
-{{"name":"...","keywords":["3 short"],"category":"<linear|sheet|part|bulk>","family":"<snake_case>","description":"...","length_in":0,"width_in":0,"qty":1,"condition":"A-D","composition":["<=3"],"structural":"...","thermal":"ignition/melt F","hazards":"...","reuse":["<=3"],"confidence":"high|medium|low"}}
+{{"name":"...","keywords":["3 short"],"category":"<linear|sheet|part|bulk>","family":"<snake_case>","description":"...","length_in":0,"width_in":0,"qty":1,"condition":"A-D","composition":["<=3"],"structural":"...","thermal":"ignition/melt F","hazards":"...","reuse":["<=3"],"est_value_usd":0,"value_tier":"<scrap|reuse|resale>","confidence":"high|medium|low"}}
+
+Value tiers: scrap = feedstock only; reuse = useful as building material; resale = sellable as-is (unused/sealed/branded goods). Unopened packaging or shrink wrap suggests grade A and possible resale tier.
 
 Condition: A=like new B=serviceable C=worn D=degraded.
 KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing else:
@@ -167,11 +169,16 @@ def mk_row(p):
 # ---------------------------------------------------------------- passport print
 def show_passport(p, tier, seen):
     stamp = f"KNOWN ITEM — ANALYSIS SKIPPED (seen {seen}x)" if tier == 1 else "NEW ITEM — ANALYZED + LEARNED"
+    if p.get("value_tier") == "resale":
+        stamp += "  ** HIGH VALUE — HOLD FOR RESALE/CREDIT **"
     print(f"\n  ┌─ {p.get('name','?')}  [{stamp}]")
     for k in ("description", "composition", "structural", "thermal", "hazards", "reuse"):
         v = p.get(k)
         if isinstance(v, list): v = " · ".join(str(x) for x in v)
         if v: print(f"  │ {k:<12} {v}")
+    if p.get("value_tier"):
+        print(f"  │ {'value':<12} tier: {p['value_tier']}"
+              + (f" · est ${p['est_value_usd']}" if p.get("est_value_usd") else ""))
     print(f"  └ {p.get('category','?')}/{p.get('family','?')} · "
           f"{p.get('length_in','?')}\"x{p.get('width_in','?')}\" · qty {p.get('qty',1)} · grade {p.get('condition','?')}")
 
@@ -199,7 +206,7 @@ def main():
                '{"name":"Test widget","keywords":["test"],"category":"part","family":"test_part",'
                '"description":"dry-run item","length_in":10,"width_in":2,"qty":1,"condition":"B",'
                '"composition":["testium"],"structural":"n/a","thermal":"n/a","hazards":"none",'
-               '"reuse":["testing"],"confidence":"high"}]}')
+               '"reuse":["testing"],"est_value_usd":120,"value_tier":"resale","confidence":"high"}]}')
         print("DRYRUN  using canned model response")
     else:
         print(f"SCAN    one pass vs {len(library)} learned items...")
