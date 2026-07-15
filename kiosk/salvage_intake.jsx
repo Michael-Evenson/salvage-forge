@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 
 // =============================================================================
-// SALVAGE INTAKE KIOSK v0.4 — photo -> material passports -> inventory rows
+// SALVAGE INTAKE KIOSK v0.5 — photo -> material passports -> inventory rows
 //
 // v0.4: instrumented. The bridge between artifacts and the API was rejecting
 // calls with an opaque error, so this version can diagnose itself:
@@ -129,6 +129,14 @@ Examine the photo. Identify up to 3 distinct salvageable ITEMS (ignore furniture
 {"name":"<specific name>","keywords":["<3 short keywords>"],"category":"<linear|sheet|part|bulk>","family":"<snake_case material class>","description":"<one short line>","length_in":<n>,"width_in":<n>,"qty":<n>,"condition":"<A-D>","composition":["<=3 short entries"],"structural":"<one short line>","thermal":"<ignition/melt points F, short>","hazards":"<short>","reuse":["<=3 short ideas"],"confidence":"<high|medium|low>"}
 
 Condition: A=like new B=serviceable C=worn D=degraded.
+
+EPISTEMIC RULES — follow strictly:
+1. Name items by what is VISIBLE, not assumed identity. If purpose/product is ambiguous, use a descriptive name ("folded corrugated sheet") and put specific guesses in "could_be".
+2. All dimensions are ROUGH ESTIMATES. State your size reference in "dims_note" (e.g. "vs couch cushion"). Never present exact dimensions as fact.
+3. Never claim what you cannot see: contents of packaging, total length on a spool, hidden faces, exact counts.
+4. If identity or size is materially uncertain, fill "ask" with the ONE question or photo angle that would resolve it.
+Extra fields for each NEW passport: "id_basis":"<visible evidence for the name>","could_be":["<=2 alternates"],"dims_note":"<size reference used>","ask":"<question or empty>"
+
 KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing else:
 {"items":[ ... ]}`;
 
@@ -210,10 +218,11 @@ export default function SalvageIntakeKiosk() {
     try {
       const index = newLib.map(e => ({ id: e.id, name: e.name, keywords: e.keywords }));
       let parsed = null, raw = "";
-      for (const maxPx of [1400, 900, 600]) {           // adaptive size ladder
+      for (const maxPx of [820, 640, 480, 380]) {       // web bridge chokes >~110 KB
         let enc;
-        try { enc = await encodeAt(img.url, maxPx, 0.75); }
+        try { enc = await encodeAt(img.url, maxPx, 0.72); }
         catch (e) { pushLog("ENCODE  failed at " + maxPx + "px"); continue; }
+        if (enc.kb > 105) { pushLog("SKIP    " + enc.w + "x" + enc.h + " (" + enc.kb + " KB) over bridge limit"); continue; }
         pushLog("SEND    " + enc.w + "x" + enc.h + " (" + enc.kb + " KB) vs " + newLib.length + " learned items");
         try { raw = await callClaude(scanPrompt(index), enc.b64); }
         catch (e) { pushLog("FAIL    " + e.message); continue; }   // transport-level: shrink & retry
@@ -261,6 +270,13 @@ export default function SalvageIntakeKiosk() {
     setBusy(false);
   }
 
+  function forgetItem(id) {
+    // Bad learning must be correctable: wrong passports would otherwise
+    // be recalled forever as tier-1 "knowledge".
+    const newLib = lib.filter(e => e.id !== id);
+    setLib(newLib); saveLib(newLib);
+  }
+
   async function resetLibrary() {
     setLib(SEED_LIBRARY); setInv([]); setResults([]); setLog([]);
     saveLib(SEED_LIBRARY); saveInv([]);
@@ -286,7 +302,7 @@ export default function SalvageIntakeKiosk() {
           SALVAGE INTAKE <span style={{ color: SAFETY }}>KIOSK</span>
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .75, marginTop: 3 }}>
-          library {lib.length} items · inventory {inv.length} rows · v0.4
+          library {lib.length} items · inventory {inv.length} rows · v0.5
         </div>
       </header>
       <div style={{ height: 8, background: `repeating-linear-gradient(-45deg, ${SAFETY} 0 12px, ${INK} 12px 24px)` }} />
@@ -345,8 +361,18 @@ export default function SalvageIntakeKiosk() {
                   <div style={{ fontWeight: 600 }}>{e.name}</div>
                   <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .65 }}>{(e.passport.family || "?")} · {(e.passport.category || "?")} · {(e.keywords || []).slice(0, 3).join(" / ")}</div>
                 </div>
-                <div style={{ fontFamily: "'Saira Condensed'", fontWeight: 800, fontSize: 18, color: e.seen ? STEEL : "#999" }}>
-                  {e.seen || 0}x seen · {e.id.startsWith("seed") ? "seeded" : "learned"}
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ fontFamily: "'Saira Condensed'", fontWeight: 800, fontSize: 18, color: e.seen ? STEEL : "#999" }}>
+                    {e.seen || 0}x seen · {e.id.startsWith("seed") ? "seeded" : "learned"}
+                  </div>
+                  {!e.id.startsWith("seed") && (
+                    <button className="actbtn" onClick={() => forgetItem(e.id)}
+                      style={{ fontFamily: "'Saira Condensed'", fontWeight: 600, fontSize: 12, letterSpacing: 1,
+                               padding: "4px 10px", border: "2px solid " + RUST, color: RUST,
+                               background: "transparent", borderRadius: 3, cursor: "pointer", textTransform: "uppercase" }}>
+                      Forget
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -377,7 +403,9 @@ function Passport({ r }) {
   const p = r.passport;
   const rows = [
     ["Class", `${p.category || "?"} / ${p.family || "?"}`],
-    ["Size", `${p.length_in || "?"}" x ${p.width_in || "?"}" · qty ${p.qty || 1} · grade ${p.condition || "?"}`],
+    ["Size", `~${p.length_in || "?"}" x ~${p.width_in || "?"}" (estimate${p.dims_note ? ", " + p.dims_note : ""}) · qty ${p.qty || 1} · grade ${p.condition || "?"}`],
+    ["ID basis", p.id_basis],
+    ["Could be", (p.could_be || []).join(" · ")],
     ["Composition", (p.composition || []).join(" · ")],
     ["Structural", p.structural],
     ["Thermal", p.thermal],
@@ -400,8 +428,11 @@ function Passport({ r }) {
         padding: "4px 8px", borderRadius: 3, textAlign: "center", background: "#FFFDF690" }}>
         {r.tier === 1 ? <>KNOWN ITEM<br />ANALYSIS SKIPPED<br />seen {r.seen}x</> : <>NEW ITEM<br />ANALYZED + LEARNED</>}
       </div>
+      {p.ask && <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, marginTop: 8, padding: "6px 8px", background: "#F2B60F30", border: "1px solid " + SAFETY, borderRadius: 3 }}>
+        TO CONFIRM: {p.ask}
+      </div>}
       <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10.5, marginTop: 8, opacity: .6 }}>
-        Row added to inventory. {p.confidence ? `Confidence: ${p.confidence}. ` : ""}Dimensions are visual estimates — tape-check structural stock.
+        Row added to inventory. {p.confidence ? `Confidence: ${p.confidence}. ` : ""}All dimensions are estimates — tape-check before cutting plans.
       </div>
     </div>
   );
