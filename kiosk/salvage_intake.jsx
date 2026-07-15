@@ -123,7 +123,7 @@ const scanPrompt = (index) => `You are a salvage-yard intake analyst cataloging 
 KNOWN LIBRARY (id :: name :: keywords):
 ${index.map(e => `${e.id} :: ${e.name} :: ${e.keywords.join(", ")}`).join("\n")}
 
-Examine the photo. Identify up to 3 distinct salvageable ITEMS (ignore furniture, people, pets, room background). For EACH item output ONE of:
+Examine the photo. Identify up to 4 distinct salvageable ITEMS (ignore furniture, people, pets, room background). Two objects of the same material but different form are SEPARATE items — e.g. a flattened/folded sheet leaning against an intact box is 2 items. Count physical objects, not material types. For EACH item output ONE of:
 - If it clearly matches a library entry: {"known":"<library id>","qty":<count>,"condition":"<A|B|C|D>"}
 - Otherwise a NEW passport (estimate dimensions from context; use known manufacturing facts for recognizable items):
 {"name":"<specific name>","keywords":["<3 short keywords>"],"category":"<linear|sheet|part|bulk>","family":"<snake_case material class>","description":"<one short line>","length_in":<n>,"width_in":<n>,"qty":<n>,"condition":"<A-D>","composition":["<=3 short entries"],"structural":"<one short line>","thermal":"<ignition/melt points F, short>","hazards":"<short>","reuse":["<=3 short ideas"],"confidence":"<high|medium|low>"}
@@ -135,7 +135,8 @@ EPISTEMIC RULES — follow strictly:
 2. All dimensions are ROUGH ESTIMATES. State your size reference in "dims_note" (e.g. "vs couch cushion"). Never present exact dimensions as fact.
 3. Never claim what you cannot see: contents of packaging, total length on a spool, hidden faces, exact counts.
 4. If identity or size is materially uncertain, fill "ask" with the ONE question or photo angle that would resolve it.
-Extra fields for each NEW passport: "id_basis":"<visible evidence for the name>","could_be":["<=2 alternates"],"dims_note":"<size reference used>","ask":"<question or empty>"
+Extra fields for each NEW passport: "observed":["<=4 short concrete facts directly visible in the photo"],"id_basis":"<visible evidence for the name>","could_be":["<=2 alternates"],"dims_note":"<size reference used>","ask":"<question or empty>"
+Note: composition/structural/thermal/hazards are material-class knowledge, not observations — they will be shown to the user as estimates.
 
 KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing else:
 {"items":[ ... ]}`;
@@ -303,7 +304,7 @@ export default function SalvageIntakeKiosk() {
           SALVAGE INTAKE <span style={{ color: SAFETY }}>KIOSK</span>
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .75, marginTop: 3 }}>
-          library {lib.length} items · inventory {inv.length} rows · v0.6
+          library {lib.length} items · inventory {inv.length} rows · v0.7
         </div>
       </header>
       <div style={{ height: 8, background: `repeating-linear-gradient(-45deg, ${SAFETY} 0 12px, ${INK} 12px 24px)` }} />
@@ -355,6 +356,11 @@ export default function SalvageIntakeKiosk() {
             </section>
             <section>
               <h2 style={h2s}>Material passports</h2>
+              <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10, marginBottom: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ color: GOOD }}>■ observed</span>
+                <span style={{ color: "#8A6100" }}>■ estimated</span>
+                <span style={{ color: RUST }}>■ needs confirmation</span>
+              </div>
               {results.length === 0 && <div style={{ fontSize: 13, opacity: .6, padding: "30px 10px", textAlign: "center", border: `2px dashed ${INK}30`, borderRadius: 4 }}>
                 Passports print here — one per item found.<br />Known items skip straight through; that's the learning.</div>}
               {results.map((r, i) => <div key={i} style={{ marginBottom: 12 }}><Passport r={r} /></div>)}
@@ -411,38 +417,59 @@ export default function SalvageIntakeKiosk() {
 
 function Passport({ r }) {
   const p = r.passport;
-  const rows = [
-    ["Class", `${p.category || "?"} / ${p.family || "?"}`],
-    ["Size", `~${p.length_in || "?"}" x ~${p.width_in || "?"}" (estimate${p.dims_note ? ", " + p.dims_note : ""}) · qty ${p.qty || 1} · grade ${p.condition || "?"}`],
-    ["ID basis", p.id_basis],
-    ["Could be", (p.could_be || []).join(" · ")],
-    ["Composition", (p.composition || []).join(" · ")],
-    ["Structural", p.structural],
-    ["Thermal", p.thermal],
-    ["Hazards", p.hazards],
-    ["Reuse", (p.reuse || []).join(" · ")]
-  ];
+  const AMBER = "#8A6100";
+  const Band = ({ color, label, children }) => (
+    <div style={{ borderLeft: `5px solid ${color}`, background: color + "14", padding: "6px 10px", margin: "10px 0 0", borderRadius: "0 3px 3px 0" }}>
+      <div style={{ fontFamily: "'IBM Plex Mono'", fontWeight: 600, fontSize: 10, letterSpacing: 1, color, textTransform: "uppercase", marginBottom: 3 }}>{label}</div>
+      {children}
+    </div>
+  );
+  const Row = ({ k, v }) => {
+    if (!v || (Array.isArray(v) && v.length === 0)) return null;
+    return (
+      <div style={{ display: "grid", gridTemplateColumns: "88px 1fr", gap: 8, fontSize: 12.5, padding: "2px 0" }}>
+        <div style={{ fontFamily: "'IBM Plex Mono'", fontWeight: 600, fontSize: 10, textTransform: "uppercase", letterSpacing: .5, opacity: .65, paddingTop: 2 }}>{k}</div>
+        <div>{Array.isArray(v) ? v.join(" · ") : v}</div>
+      </div>
+    );
+  };
   return (
     <div style={{ position: "relative", border: `2px solid ${INK}`, borderRadius: 4, background: "#FFFDF6", padding: "12px 14px", boxShadow: "3px 3px 0 " + INK }}>
       <div style={{ fontFamily: "'Saira Condensed'", fontWeight: 800, fontSize: 20, lineHeight: 1.1, paddingRight: 110 }}>{p.name}</div>
-      <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .65, marginBottom: 8 }}>{p.description}</div>
-      {rows.filter(x => x[1]).map(([k, v]) => (
-        <div key={k} style={{ display: "grid", gridTemplateColumns: "92px 1fr", gap: 8, fontSize: 12.5, padding: "5px 0", borderTop: `1px solid ${INK}22` }}>
-          <div style={{ fontFamily: "'IBM Plex Mono'", fontWeight: 600, fontSize: 10.5, textTransform: "uppercase", letterSpacing: .5, opacity: .7 }}>{k}</div>
-          <div>{v}</div>
-        </div>
-      ))}
+      <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .65 }}>{p.description}</div>
+
+      <Band color={GOOD} label="Observed — visible in the photo">
+        <Row k="Evidence" v={p.id_basis} />
+        <Row k="Seen" v={p.observed} />
+        <Row k="Count" v={`qty ${p.qty || 1} · condition grade ${p.condition || "?"}`} />
+      </Band>
+
+      <Band color={AMBER} label="Estimated — model judgment, verify before relying on it">
+        <Row k="Size" v={`~${p.length_in || "?"}\" x ~${p.width_in || "?"}\"${p.dims_note ? " (" + p.dims_note + ")" : ""}`} />
+        <Row k="Class" v={`${p.category || "?"} / ${p.family || "?"}`} />
+        <Row k="Could be" v={p.could_be} />
+        <Row k="Composition" v={p.composition} />
+        <Row k="Structural" v={p.structural} />
+        <Row k="Thermal" v={p.thermal} />
+        <Row k="Hazards" v={p.hazards} />
+        <Row k="Reuse" v={p.reuse} />
+        <Row k="Value" v={p.value_tier ? p.value_tier + (p.est_value_usd ? ` · est $${p.est_value_usd}` : "") : null} />
+      </Band>
+
+      {p.ask && (
+        <Band color={RUST} label="To confirm — the kiosk needs an answer">
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>{p.ask}</div>
+        </Band>
+      )}
+
       <div className="stamp" style={{ position: "absolute", top: 10, right: 10, transform: "rotate(-8deg)",
         border: `3px double ${r.tier === 1 ? GOOD : RUST}`, color: r.tier === 1 ? GOOD : RUST,
         fontFamily: "'Saira Condensed'", fontWeight: 800, fontSize: 13, lineHeight: 1.15,
         padding: "4px 8px", borderRadius: 3, textAlign: "center", background: "#FFFDF690" }}>
         {r.tier === 1 ? <>KNOWN ITEM<br />ANALYSIS SKIPPED<br />seen {r.seen}x</> : <>NEW ITEM<br />ANALYZED + LEARNED</>}
       </div>
-      {p.ask && <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, marginTop: 8, padding: "6px 8px", background: "#F2B60F30", border: "1px solid " + SAFETY, borderRadius: 3 }}>
-        TO CONFIRM: {p.ask}
-      </div>}
       <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 10.5, marginTop: 8, opacity: .6 }}>
-        Row added to inventory. {p.confidence ? `Confidence: ${p.confidence}. ` : ""}All dimensions are estimates — tape-check before cutting plans.
+        Row added to inventory.{p.confidence ? ` Confidence: ${p.confidence}.` : ""}
       </div>
     </div>
   );
