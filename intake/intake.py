@@ -10,7 +10,8 @@ middleman: photo -> material passport(s) -> inventory.csv rows.
 
 Usage:
     export ANTHROPIC_API_KEY=sk-ant-...        # from console.anthropic.com
-    python3 intake.py photo.jpg                # run an intake
+    python3 intake.py photo.jpg                # run an intake (Anthropic API)
+    python3 intake.py photo.jpg --local        # run against local Ollama model
     python3 intake.py photo.jpg --dry-run      # resize/parse pipeline only, no API
     python3 intake.py --library                # show what's been learned
 
@@ -31,6 +32,9 @@ except ImportError:
 
 API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-4-6"       # vision-capable; swap to a Haiku model to cut cost
+# Local backend (Ollama): run `ollama pull qwen3-vl:8b` then use --local.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3-vl:8b")
 MAX_TOKENS = 1200
 LIB_PATH, INV_PATH = "library.json", "inventory.csv"
 INV_HEADER = "id,category,family,description,length_in,width_in,qty,condition"
@@ -97,7 +101,20 @@ Condition: A=like new B=serviceable C=worn D=degraded.
 KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing else:
 {{"items":[ ... ]}}"""
 
-# ---------------------------------------------------------------- API call
+# ---------------------------------------------------------------- API calls
+def call_ollama(prompt, image_b64):
+    """Local inference via Ollama's chat API. Same contract as call_claude:
+    prompt + base64 image in, raw text out. No key, no cloud, no caps."""
+    body = {"model": OLLAMA_MODEL, "stream": False,
+            "options": {"num_predict": 1600, "temperature": 0.2},
+            "messages": [{"role": "user", "content": prompt,
+                          "images": [image_b64]}]}
+    r = requests.post(OLLAMA_URL + "/api/chat", json=body, timeout=600)
+    data = r.json()
+    if "error" in data:
+        raise RuntimeError(f"Ollama: {data['error']}")
+    return data.get("message", {}).get("content", "")
+
 def call_claude(prompt, image_b64):
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
@@ -208,6 +225,10 @@ def main():
     b64, info = prep_image(photo)
     print(f"PHOTO   {photo} -> {info}")
 
+    call_model = call_ollama if "--local" in flags else call_claude
+    if "--local" in flags:
+        print(f"MODE    local via Ollama ({OLLAMA_MODEL} @ {OLLAMA_URL})")
+
     if "--dry-run" in flags:
         # Exercise the whole pipeline with a canned response — no API needed.
         raw = ('{"items":[{"known":"seed-amzn-box","qty":2,"condition":"B"},'
@@ -218,13 +239,13 @@ def main():
         print("DRYRUN  using canned model response")
     else:
         print(f"SCAN    one pass vs {len(library)} learned items...")
-        raw = call_claude(scan_prompt(library), b64)
+        raw = call_model(scan_prompt(library), b64)
 
     try:
         parsed = repair_and_parse(raw)
     except ValueError as e:
         print(f"PARSE   {e} — retrying once with strict instruction")
-        raw = call_claude(scan_prompt(library) + "\n\nOutput ONLY the JSON object.", b64)
+        raw = call_model(scan_prompt(library) + "\n\nOutput ONLY the JSON object.", b64)
         parsed = repair_and_parse(raw)
 
     if parsed.get("truncated"):
