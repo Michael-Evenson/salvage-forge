@@ -159,6 +159,7 @@ export default function SalvageIntakeKiosk() {
   const [results, setResults] = useState([]);
   const [tab, setTab] = useState("intake");
   const fileRef = useRef(null);
+  const pickRef = useRef(null);
 
   useEffect(() => { loadState().then(s => { setLib(s.lib); setInv(s.inv); }); }, []);
   const pushLog = (line) => setLog(l => [...l, line]);
@@ -302,7 +303,7 @@ export default function SalvageIntakeKiosk() {
           SALVAGE INTAKE <span style={{ color: SAFETY }}>KIOSK</span>
         </div>
         <div style={{ fontFamily: "'IBM Plex Mono'", fontSize: 11, opacity: .75, marginTop: 3 }}>
-          library {lib.length} items · inventory {inv.length} rows · v0.5
+          library {lib.length} items · inventory {inv.length} rows · v0.6
         </div>
       </header>
       <div style={{ height: 8, background: `repeating-linear-gradient(-45deg, ${SAFETY} 0 12px, ${INK} 12px 24px)` }} />
@@ -323,11 +324,20 @@ export default function SalvageIntakeKiosk() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
             <section>
               <h2 style={h2s}>1 · Photograph the donation</h2>
+              {/* Two inputs: one forces the camera, one opens the normal chooser
+                  (Photo Library / Files -> iCloud, Google Drive, Dropbox...) */}
               <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPickFile} style={{ display: "none" }} />
-              <button className="actbtn" onClick={() => fileRef.current && fileRef.current.click()}
-                style={{ ...bigBtn, background: img ? PANEL : SAFETY }}>
-                {img ? "Retake / choose another photo" : "Take or choose photo"}
-              </button>
+              <input ref={pickRef} type="file" accept="image/*" onChange={onPickFile} style={{ display: "none" }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="actbtn" onClick={() => fileRef.current && fileRef.current.click()}
+                  style={{ ...bigBtn, background: img ? PANEL : SAFETY }}>
+                  Camera
+                </button>
+                <button className="actbtn" onClick={() => pickRef.current && pickRef.current.click()}
+                  style={{ ...bigBtn, background: PANEL }}>
+                  Library / Files
+                </button>
+              </div>
               {img && <img src={img.url} alt="donation" style={{ width: "100%", marginTop: 10, border: `2px solid ${INK}`, borderRadius: 4, maxHeight: 300, objectFit: "contain", background: CONCRETE }} />}
               <button className="actbtn" onClick={runIntake} disabled={!img || busy}
                 style={{ ...bigBtn, marginTop: 10, background: !img || busy ? CONCRETE : INK, color: !img || busy ? "#999" : PANEL }}>
