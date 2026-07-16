@@ -1,0 +1,146 @@
+================================================================
+CUT SHEET: Cold frame (46.0x32.0 window lid)
+Reclaimed window hinged onto a sloped box. Pallet lumber ok.
+================================================================
+S01#4    framing                        92.6" stick
+         cut 1 x  long rail @ 46.0"
+         cut 1 x  short rail @ 32.0"
+         cut 1 x  corner post short @ 8.0"
+         offcut: 6.2"  (scrap)
+S01#8    framing                        92.6" stick
+         cut 1 x  long rail @ 46.0"
+         cut 1 x  short rail @ 32.0"
+         cut 1 x  corner post @ 14.0"
+         offcut: 0.2"  (scrap)
+S02#1    framing                        96.0" stick
+         cut 1 x  long rail @ 46.0"
+         cut 1 x  short rail @ 32.0"
+         cut 1 x  corner post short @ 8.0"
+         offcut: 9.6"  (scrap)
+S02#3    framing                        96.0" stick
+         cut 1 x  long rail @ 46.0"
+         cut 1 x  short rail @ 32.0"
+         cut 1 x  corner post @ 14.0"
+         offcut: 3.6"  (scrap)
+----------------------------------------------------------------
+Pieces consumed: 4   Total offcut: 19.7" (1.6 ft)
+================================================================
+CUT SHEET: Bike cargo trailer (24x48 deck, wheel_26)
+EMT frame, plywood deck, salvaged wheel pair. Code-free build.
+================================================================
+S05#1    conduit                       120.0" stick
+         cut 1 x  crossbar @ 24.0"
+         cut 1 x  hitch tongue @ 40.0"
+         offcut: 55.8"  <- RETURN TO INVENTORY
+S05#4    conduit                       120.0" stick
+         cut 1 x  side rail @ 60.0"
+         offcut: 59.9"  <- RETURN TO INVENTORY
+S05#5    conduit                       120.0" stick
+         cut 1 x  side rail @ 60.0"
+         cut 2 x  crossbar @ 24.0"
+         offcut: 11.6"  (scrap)
+----------------------------------------------------------------
+Pieces consumed: 3   Total offcut: 127.2" (10.6 ft)
+================================================================
+CUT SHEET: Geodesic dome 3V 5/8 (r=2.8 ft, dia=5.7 ft)
+Domebook 2 geometry. 165 struts, 61 hubs (hose-clamp or strap). Garden/play/greenhouse duty at small radii.
+================================================================
+S01#1    framing                        92.6" stick
+         cut 6 x  C strut @ 14.0"
+         offcut: 7.8"  (scrap)
+S01#10   framing                        92.6" stick
+         cut 3 x  A strut @ 11.9"
+         cut 4 x  B strut @ 13.7"
+         offcut: 1.2"  (scrap)
+S01#11   framing                        92.6" stick
+         cut 3 x  A strut @ 11.9"
+         cut 4 x  B strut @ 13.7"
+         offcut: 1.2"  (scrap)
+S01#12   framing                        92.6" stick
+         cut 6 x  B strut @ 13.7"
+         offcut: 9.7"  (scrap)
+S01#13   framing                        92.6" stick
+         cut 6 x  B strut @ 13.7"
+         offcut: 9.7"  (scrap)
+S01#14   framing                        92.6" stick
+         cut 3 x  A strut @ 11.9"
+         cut 4 x  C strut @ 14.0"
+         offcut: 0.0"  (scrap)
+S01#2    framing                        92.6" stick
+         cut 3 x  A strut @ 11.9"
+         cut 4 x  C strut @ 14.0"
+         offcut: 0.0"  (scrap)
+S01#3    framing                        92.6" stick
+         cut 3 x  A strut @ 11.9"
+         cut 4 x  C strut @ 14.0"
+         offcut: 0.0"  (scrap)
+S01#5    framing                        92.6" stick
+         cut 6 x  C strut @ 14.0"
+         offcut: 7.8"  (scrap)
+S01#6    framing                        92.6" stick
+         cut 3 x  A strut @ 11.9"
+         cut 4 x  C strut @ 14.0"
+         offcut: 0.0"  (scrap)
+S01#7    framing                        92.6" stick
+         cut 3 x  A strut @ 11.9"
+         cut 4 x  C strut @ 14.0"
+         offcut: 0.0"  (scrap)
+S01#9    framing                        92.6" stick
+         cut 6 x  C strut @ 14.0"
+         offcut: 7.8"  (scrap)
+S02#10   framing                        96.0" stick
+         cut 1 x  A strut @ 11.9"
+         cut 3 x  B strut @ 13.7"
+         cut 3 x  C strut @ 14.0"
+         offcut: 0.1"  (scrap)
+S02#2    framing                        96.0" stick
+         cut 1 x  A strut @ 11.9"
+         cut 3 x  B strut @ 13.7"
+         cut 3 x  C strut @ 14.0"
+         offcut: 0.1"  (scrap)
+S02#4    framing                        96.0" stick
+         cut 1 x  A strut @ 11.9"
+         cut 6 x  B strut @ 13.7"
+         offcut: 1.0"  (scrap)
+S02#5    framing                        96.0" stick
+         cut 1 x  A strut @ 11.9"
+         cut 3 x  B strut @ 13.7"
+         cut 3 x  C strut @ 14.0"
+         offcut: 0.1"  (scrap)
+S02#6    framing                        96.0" stick
+         cut 1 x  A strut @ 11.9"
+         cut 3 x  B strut @ 13.7"
+         cut 3 x  C strut @ 14.0"
+         offcut: 0.1"  (scrap)
+S02#7    framing                        96.0" stick
+         cut 1 x  A strut @ 11.9"
+         cut 6 x  B strut @ 13.7"
+         offcut: 1.0"  (scrap)
+S02#8    framing                        96.0" stick
+         cut 2 x  A strut @ 11.9"
+         cut 5 x  C strut @ 14.0"
+         offcut: 1.3"  (scrap)
+S02#9    framing                        96.0" stick
+         cut 1 x  A strut @ 11.9"
+         cut 6 x  B strut @ 13.7"
+         offcut: 1.0"  (scrap)
+S03#1    framing                        72.0" stick
+         cut 5 x  C strut @ 14.0"
+         offcut: 1.4"  (scrap)
+S03#2    framing                        72.0" stick
+         cut 5 x  C strut @ 14.0"
+         offcut: 1.4"  (scrap)
+S03#3    framing                        72.0" stick
+         cut 5 x  C strut @ 14.0"
+         offcut: 1.4"  (scrap)
+S03#4    framing                        72.0" stick
+         cut 5 x  B strut @ 13.7"
+         offcut: 2.9"  (scrap)
+S03#5    framing                        72.0" stick
+         cut 5 x  C strut @ 14.0"
+         offcut: 1.4"  (scrap)
+S03#6    framing                        72.0" stick
+         cut 5 x  C strut @ 14.0"
+         offcut: 1.4"  (scrap)
+----------------------------------------------------------------
+Pieces consumed: 26   Total offcut: 60.1" (5.0 ft)

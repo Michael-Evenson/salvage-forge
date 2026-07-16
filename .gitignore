@@ -1,0 +1,17 @@
+# runtime artifacts — the kiosk's memory and ledger stay local
+library.json
+inventory.csv
+!matcher/sample_inventory.csv
+cutsheets.txt
+
+# secrets — never commit keys
+.env
+*.key
+
+# python
+__pycache__/
+*.pyc
+
+# OS noise
+.DS_Store
+Thumbs.db
