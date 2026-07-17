@@ -121,12 +121,16 @@ def call_ollama(prompt, image_b64):
     """Local inference via Ollama's chat API. Same contract as call_claude:
     prompt + base64 image in, raw text out. No key, no cloud, no caps."""
     # qwen3-vl is a reasoning model: by default Ollama has it emit a hidden
-    # "thinking" pass before the answer. That pass counts against num_predict,
-    # so a low budget can exhaust itself mid-thought and leave content empty.
-    # think:false skips reasoning entirely (cleaner + faster); num_predict is
-    # raised as a safety margin in case a future model ignores think:false.
+    # "thinking" pass before the answer, and that pass counts against
+    # num_predict. think:false is the documented way to skip it, but
+    # qwen3-vl:8b ships with a broken chat template that ignores think:false
+    # entirely (open Ollama bug: github.com/ollama/ollama/issues/14798) --
+    # it always thinks, and a low budget can run out mid-thought, leaving
+    # content empty (done_reason:"length"). We still pass think:false (free,
+    # and correct once Ollama fixes the template) but the real fix for now is
+    # a big enough num_predict for the model to finish thinking AND answer.
     body = {"model": OLLAMA_MODEL, "stream": False, "think": False,
-            "options": {"num_predict": 4000, "temperature": 0.2},
+            "options": {"num_predict": 10000, "temperature": 0.2},
             "messages": [{"role": "user", "content": prompt,
                           "images": [image_b64]}]}
     try:
