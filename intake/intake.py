@@ -122,7 +122,10 @@ def call_ollama(prompt, image_b64):
             "options": {"num_predict": 1600, "temperature": 0.2},
             "messages": [{"role": "user", "content": prompt,
                           "images": [image_b64]}]}
-    r = requests.post(OLLAMA_URL + "/api/chat", json=body, timeout=600)
+    try:
+        r = requests.post(OLLAMA_URL + "/api/chat", json=body, timeout=600)
+    except requests.exceptions.ConnectionError:
+        sys.exit(f"No Ollama server at {OLLAMA_URL} — is it running? (ollama serve)")
     data = r.json()
     if "error" in data:
         raise RuntimeError(f"Ollama: {data['error']}")
