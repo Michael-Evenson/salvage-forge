@@ -19,7 +19,7 @@ Files it maintains (created on first run, in the working directory):
     library.json     the learned material-passport library
     inventory.csv    rows in the schema matcher.jl reads
 
-Dependencies:  pip install requests pillow
+Dependencies:  pip install requests pillow pillow-heif
 """
 
 import base64, io, json, os, re, sys, time, random
@@ -28,7 +28,13 @@ try:
     import requests
     from PIL import Image
 except ImportError:
-    sys.exit("Missing dependencies. Run:  pip install requests pillow")
+    sys.exit("Missing dependencies. Run:  pip install requests pillow pillow-heif")
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()           # lets Image.open() read iPhone .heic/.heif photos
+except ImportError:
+    pass                                          # HEIC support just won't be available; JPEG/PNG etc. still work
 
 API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-4-6"       # vision-capable; swap to a Haiku model to cut cost
