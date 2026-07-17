@@ -13,6 +13,7 @@ Usage:
     python3 intake.py photo.jpg                # run an intake (Anthropic API)
     python3 intake.py photo.jpg --local        # run against local Ollama model
     python3 intake.py photo.jpg --dry-run      # resize/parse pipeline only, no API
+    python3 intake.py photo.jpg --verbose      # also print the raw model response
     python3 intake.py --library                # show what's been learned
 
 Files it maintains (created on first run, in the working directory):
@@ -245,6 +246,8 @@ def main():
     if "--local" in flags:
         print(f"MODE    local via Ollama ({OLLAMA_MODEL} @ {OLLAMA_URL})")
 
+    verbose = "--verbose" in flags
+
     if "--dry-run" in flags:
         # Exercise the whole pipeline with a canned response — no API needed.
         raw = ('{"items":[{"known":"seed-amzn-box","qty":2,"condition":"B"},'
@@ -256,13 +259,20 @@ def main():
     else:
         print(f"SCAN    one pass vs {len(library)} learned items...")
         raw = call_model(scan_prompt(library), b64)
+    if verbose:
+        print(f"RAW     {raw}")
 
     try:
         parsed = repair_and_parse(raw)
     except ValueError as e:
         print(f"PARSE   {e} — retrying once with strict instruction")
         raw = call_model(scan_prompt(library) + "\n\nOutput ONLY the JSON object.", b64)
-        parsed = repair_and_parse(raw)
+        if verbose:
+            print(f"RAW     {raw}")
+        try:
+            parsed = repair_and_parse(raw)
+        except ValueError as e2:
+            sys.exit(f"PARSE   giving up after retry: {e2}\n{raw[:500]}")
 
     if parsed.get("truncated"):
         print("NOTE    response truncated — salvaged complete items only")
