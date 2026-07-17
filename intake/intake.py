@@ -36,6 +36,13 @@ try:
 except ImportError:
     pass                                          # HEIC support just won't be available; JPEG/PNG etc. still work
 
+# Windows consoles default to the cp1252 codepage, which can't encode the box-drawing
+# characters in show_passport() (or arbitrary Unicode a model might return in a
+# passport field) — force UTF-8 so printing never crashes the pipeline.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 API_URL = "https://api.anthropic.com/v1/messages"
 MODEL = "claude-sonnet-4-6"       # vision-capable; swap to a Haiku model to cut cost
 # Local backend (Ollama): run `ollama pull qwen3-vl:8b` then use --local.
