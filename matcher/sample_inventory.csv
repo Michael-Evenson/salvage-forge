@@ -11,3 +11,4 @@ P01,part,wheel_26,26in bike wheel w/ tire,0,0,2,B
 P02,part,wheel_20,20in bike wheel,0,0,1,C
 P03,part,hinge,3in door hinge,0,0,6,A
 P04,part,tarp,10x12 poly tarp,0,0,1,B
+B01,bulk,wire,14 AWG THHN wire spool (length_in holds FEET for bulk rows),150.0,0,2,B

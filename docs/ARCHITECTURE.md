@@ -54,6 +54,14 @@ Shortfall slack doubles as the kiosk "wish list." The geodesic dome
 template searches its own radius: the structure shrinks to fit the pile.
 Sequential planning re-solves against the depleted pool after each build.
 
+Sheet, part, and bulk demands (`SheetDemand`/`PartDemand`/`BulkDemand`)
+sit outside the MILP as simple capacity/count checks folded into the
+same shortfall report — no cutting-stock combinatorics needed for a
+continuous or discrete-count quantity. Every template's shortfall is
+also written as structured JSON (`shortfall.json`, gitignored) — the
+price signal [`docs/ECONOMY.md`](ECONOMY.md)'s build stage 1 exposes for
+stage 2 (Salvage's `value_tier`) to eventually read.
+
 ## Backend-agnostic inference
 
 `call_claude()` and `call_ollama()` honor one contract: (prompt, image) →

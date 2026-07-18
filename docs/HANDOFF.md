@@ -16,7 +16,7 @@ talk to Claude in the panel, review diffs, commit, push.
 - **(Optional, local AI)** Ollama from ollama.com, then:
   `ollama pull qwen3-vl:8b`
 - **(Optional, matcher work)** Julia from julialang.org, then:
-  `julia -e 'using Pkg; Pkg.add(["JuMP","HiGHS"])'`
+  `julia -e 'using Pkg; Pkg.add(["JuMP","HiGHS","JSON"])'`
 
 ## 1. Put the repo on GitHub (one time)
 
