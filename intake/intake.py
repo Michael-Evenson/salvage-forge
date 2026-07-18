@@ -51,6 +51,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3-vl:8b")
 MAX_TOKENS = 1200
 LIB_PATH, INV_PATH = "library.json", "inventory.csv"
+VERBOSE = "--verbose" in sys.argv[1:]
 INV_HEADER = "id,category,family,description,length_in,width_in,qty,condition"
 
 SEED_LIBRARY = [
@@ -119,8 +120,22 @@ KEEP EVERY STRING UNDER 100 CHARACTERS. Respond with ONLY this JSON, nothing els
 def call_ollama(prompt, image_b64):
     """Local inference via Ollama's chat API. Same contract as call_claude:
     prompt + base64 image in, raw text out. No key, no cloud, no caps."""
-    body = {"model": OLLAMA_MODEL, "stream": False,
-            "options": {"num_predict": 1600, "temperature": 0.2},
+    # qwen3-vl is a reasoning model: by default Ollama has it emit a hidden
+    # "thinking" pass before the answer, and that pass counts against
+    # num_predict. think:false is the documented way to skip it, but
+    # qwen3-vl:8b ships with a broken chat template that ignores think:false
+    # entirely (open Ollama bug: github.com/ollama/ollama/issues/14798) --
+    # it always thinks. We still pass think:false (free, and correct once
+    # Ollama fixes the template).
+    #
+    # Root cause of the empty-content failures: Ollama's default num_ctx is
+    # only 2048 tokens, and the image alone tokenizes to most of that --
+    # generation was hitting the CONTEXT window, not num_predict, and
+    # done_reason came back "length" with prompt_eval_count already near
+    # 2000. num_ctx must be raised explicitly (Ollama does not auto-grow it)
+    # to leave room for the prompt/image AND a full thinking+answer pass.
+    body = {"model": OLLAMA_MODEL, "stream": False, "think": False,
+            "options": {"num_predict": 10000, "num_ctx": 8192, "temperature": 0.2},
             "messages": [{"role": "user", "content": prompt,
                           "images": [image_b64]}]}
     try:
@@ -128,8 +143,12 @@ def call_ollama(prompt, image_b64):
     except requests.exceptions.ConnectionError:
         sys.exit(f"No Ollama server at {OLLAMA_URL} — is it running? (ollama serve)")
     data = r.json()
+    if VERBOSE:
+        print(f"OLLAMA  raw response: {json.dumps(data)}")
     if "error" in data:
         raise RuntimeError(f"Ollama: {data['error']}")
+    # message.thinking holds the reasoning trace (if any slipped through);
+    # message.content is the actual answer -- only return content.
     return data.get("message", {}).get("content", "")
 
 def call_claude(prompt, image_b64):

@@ -69,3 +69,9 @@ gitignored on purpose (user data / generated output).
    replaces the claude.ai artifact in kiosk/.
 6. matcher: real 2D nesting for sheet goods; global multi-build MILP.
 7. Donor credit ledger schema (donations, credits, value tiers).
+8. Close the intake↔matcher value loop. Value tiers should be driven by
+   the Forge side — an item's worth is defined by whether it matches a
+   build template (reuse) or fills a current shortfall (high value), not
+   by resale heuristics. The matcher's shortfall slack already computes
+   this signal; feed it back into intake's value assignment. This makes
+   Salvage and Forge co-dependent rather than sequential.

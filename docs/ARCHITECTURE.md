@@ -84,3 +84,8 @@ providers is one new function, zero other changes.
 - Structural review pathway for dwelling-scale outputs (graded lumber,
   licensed engineer) — small products (sheds <200 sq ft, trailers, garden
   structures) remain the code-exempt wedge
+- Close the intake↔matcher value loop: value tiers driven by the Forge
+  side — build-template match (reuse) or current shortfall fit (high
+  value) — instead of resale heuristics. The matcher's shortfall slack
+  already computes this signal; feed it back into intake's value
+  assignment, making Salvage and Forge co-dependent rather than sequential
