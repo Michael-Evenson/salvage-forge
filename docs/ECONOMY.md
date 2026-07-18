@@ -124,7 +124,7 @@ specification.
 |---|---|---|
 | **Salvage** | Two-tier recognition/learning (`intake.py`): `SEED_LIBRARY` seeds tier-1, tier-2 analysis is saved back to `library.json`. `value_tier` is assigned by prompt heuristic (`scan_prompt`'s "unopened packaging suggests grade A and possible resale tier"). | `value_tier` is resale-heuristic-driven, not demand-driven — the exact gap `docs/BENCHMARK.md` surfaced. Salvage's "KNOWN LIBRARY" index is its own item history, not Forge's build catalog — the cross-phase learning coupling described above doesn't exist. |
 | **Forge** | Three hand-written seed templates (`dome_3v`, `cold_frame`, `bike_trailer`) in `matcher.jl`. | Templates are hardcoded Julia functions. Nothing proposes a *new* template from observed salvage patterns — stage 5 below. |
-| **Matcher (price discovery)** | `match_template` already computes and returns `shortfall` per template; `main()` prints it to stdout as a kiosk wish-list. | `shortfall` is never emitted as a structured artifact another program can read — stage 1 below. There's also no `BulkDemand` template type: `match_template` only branches on `p.category == :linear` (cutting-stock demands) and `p.category == :sheet` (area demands); a `bulk` item (a real category in the CSV schema, e.g. the wire spool from `docs/BENCHMARK.md`) is invisible to both paths and can only be matched incidentally through `PartDemand`'s family check, which doesn't filter by category at all — there's no first-class demand type for a continuous bulk quantity. |
+| **Matcher (price discovery)** | Stage 1 shipped ([#6](https://github.com/Michael-Evenson/salvage-forge/pull/6), `8383cac`). `match_template` returns structured `Vector{ShortfallLine}` detail (kind/name/amount/families) for every demand type alongside the original `shortfall::Dict{String,Int}` (unchanged, still drives the stdout wish-list). `BulkDemand` is now a first-class demand type — matched via capacity check like `SheetDemand` (no cutting-stock combinatorics apply to "enough total quantity") — so a `bulk` item (e.g. the wire spool from `docs/BENCHMARK.md`) is visible to matching and can appear in shortfall. A "Utility wire run" template exercises it. `main()` writes the full per-template result set to `matcher/shortfall.json` (gitignored), additive to the existing stdout text. | Nothing reads the artifact yet — Salvage's `value_tier` still comes from the resale heuristic, not this signal (stage 2, below). Also worth naming honestly rather than hiding: bulk quantity reuses `StockPiece.length` (documented inline) rather than a dedicated field, since the CSV schema is a hard interface per `CLAUDE.md` contract #1 — a deliberate reuse, not an oversight, but a real constraint on how bulk data is represented. |
 | **Ledger** | Nothing. | Everything: schema, deposit/credit/draw/earmark operations, balance persistence, append-only log — stage 3 below. |
 
 ## Ledger mechanics
@@ -263,24 +263,24 @@ Each stage below is independently shippable and leaves the system
 working on its own — nothing here requires shipping the whole roadmap
 before any of it is usable.
 
-1. **Expose the price signal.** `match_template` in `matcher.jl` already
-   computes and returns `shortfall`; today `main()` only prints it to
-   stdout as kiosk wish-list text. Stage 1 is emitting it as a
-   structured artifact (e.g. JSON) that another program can read.
-   Smallest possible stage, and everything else depends on it.
-   - **Prerequisite hiding inside this stage:** "expose the price
-     signal" implicitly assumes every inventory category has a demand
-     path to be short *against*. Right now `bulk` doesn't — as the gap
-     table above notes, `match_template` only branches on `:linear` and
-     `:sheet`, so a `bulk` item is invisible to shortfall the way a
-     2x4 or a sheet of plywood isn't. That's not a hypothetical gap:
-     the wire spool in `docs/BENCHMARK.md` — the exact item whose
-     resale-vs-reuse divergence motivated this whole document — is a
-     `bulk` item the matcher structurally cannot see. A first-class
-     `BulkDemand` template type (or folding bulk into the existing
-     demand kinds) has to land before or alongside stage 1, or the
-     value loop it enables will cover linear and sheet goods while
-     silently leaving bulk materials unpriced.
+1. **Expose the price signal. Shipped** ([#6](https://github.com/Michael-Evenson/salvage-forge/pull/6), `8383cac`).
+   `match_template` in `matcher.jl` computed and returned `shortfall`
+   already; `main()` still prints it to stdout as kiosk wish-list text,
+   unchanged, and now *also* writes the full result set to
+   `matcher/shortfall.json` — the structured artifact stage 2 will read.
+   Was the smallest possible stage, and everything else depends on it.
+   - **Prerequisite this stage surfaced, now satisfied:** "expose the
+     price signal" implicitly assumed every inventory category had a
+     demand path to be short *against*. `bulk` didn't — `match_template`
+     only branched on `:linear` and `:sheet`, so a `bulk` item was
+     invisible to shortfall the way a 2x4 or a sheet of plywood wasn't.
+     Not a hypothetical gap: the wire spool in `docs/BENCHMARK.md` — the
+     exact item whose resale-vs-reuse divergence motivated this whole
+     document — was a `bulk` item the matcher structurally could not
+     see. Shipped alongside stage 1: `BulkDemand`, a first-class demand
+     type for a continuous quantity, folded into the same
+     shortfall/feasible mechanism as the other three demand types. Bulk
+     items can now appear in `shortfall.json` like any other category.
 2. **Close the value loop.** Salvage reads the shortfall artifact from
    stage 1 so `value_tier` reflects live demand instead of the resale
    heuristic in `scan_prompt`. This is the fix to the exact divergence
