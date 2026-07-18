@@ -45,14 +45,15 @@ python3 intake/intake.py <photo.jpg> --local
 cd matcher && julia matcher.jl sample_inventory.csv
 ```
 
-Runtime files `library.json`, `inventory.csv`, `cutsheets.txt` are
-gitignored on purpose (user data / generated output).
+Runtime files `library.json`, `inventory.csv`, `cutsheets.txt`,
+`shortfall.json` are gitignored on purpose (user data / generated
+output).
 
 ## Style
 
 - Python: stdlib + requests + pillow only; keep intake.py a single
   readable file until it genuinely hurts.
-- Julia: JuMP + HiGHS; comment the MILP formulation when changing it.
+- Julia: JuMP + HiGHS + JSON; comment the MILP formulation when changing it.
 - Prefer small, explained commits; the git history is a learning record.
 
 ## Roadmap (good next tasks, roughly in order)
