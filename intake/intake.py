@@ -125,12 +125,17 @@ def call_ollama(prompt, image_b64):
     # num_predict. think:false is the documented way to skip it, but
     # qwen3-vl:8b ships with a broken chat template that ignores think:false
     # entirely (open Ollama bug: github.com/ollama/ollama/issues/14798) --
-    # it always thinks, and a low budget can run out mid-thought, leaving
-    # content empty (done_reason:"length"). We still pass think:false (free,
-    # and correct once Ollama fixes the template) but the real fix for now is
-    # a big enough num_predict for the model to finish thinking AND answer.
+    # it always thinks. We still pass think:false (free, and correct once
+    # Ollama fixes the template).
+    #
+    # Root cause of the empty-content failures: Ollama's default num_ctx is
+    # only 2048 tokens, and the image alone tokenizes to most of that --
+    # generation was hitting the CONTEXT window, not num_predict, and
+    # done_reason came back "length" with prompt_eval_count already near
+    # 2000. num_ctx must be raised explicitly (Ollama does not auto-grow it)
+    # to leave room for the prompt/image AND a full thinking+answer pass.
     body = {"model": OLLAMA_MODEL, "stream": False, "think": False,
-            "options": {"num_predict": 10000, "temperature": 0.2},
+            "options": {"num_predict": 10000, "num_ctx": 8192, "temperature": 0.2},
             "messages": [{"role": "user", "content": prompt,
                           "images": [image_b64]}]}
     try:
