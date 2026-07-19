@@ -179,7 +179,16 @@ def call_claude(prompt, image_b64):
 
 # ---------------------------------------------------------------- parsing
 def repair_and_parse(text):
-    """Fences -> smart quotes -> brace slice -> per-object salvage."""
+    """Fences -> smart quotes -> brace slice -> per-object salvage.
+
+    The salvage path below is reached whenever the fast-path json.loads
+    fails, for ANY reason -- not necessarily because the response was
+    truncated (e.g. leading preamble text with a stray brace is enough to
+    break the naive first-'{'/last-'}' slice even when the JSON itself is
+    complete). So "took the salvage path" is not the same fact as "was
+    truncated" -- the salvage loop has to actually check whether the items
+    array reached its closing ']' before deciding which one happened.
+    """
     t = re.sub(r"```json|```", "", text)
     t = t.replace("\u201c", '"').replace("\u201d", '"').strip()
     a, b = t.find("{"), t.rfind("}")
@@ -190,7 +199,7 @@ def repair_and_parse(text):
             return json.loads(t[a:b + 1])
         except json.JSONDecodeError:
             pass
-    items, depth, obj_start, in_str, esc = [], 0, -1, False, False
+    items, depth, obj_start, in_str, esc, closed = [], 0, -1, False, False, False
     start = t.find("[", a)
     if start == -1:
         raise ValueError("unparseable response")
@@ -209,9 +218,12 @@ def repair_and_parse(text):
                 try: items.append(json.loads(t[obj_start:i + 1]))
                 except json.JSONDecodeError: pass
                 obj_start = -1
+        if c == "]" and depth == 0:
+            closed = True   # items array actually closed -- not truncated
+            break
     if not items:
         raise ValueError("no complete items salvageable")
-    return {"items": items, "truncated": True}
+    return {"items": items} if closed else {"items": items, "truncated": True}
 
 # ---------------------------------------------------------------- storage
 def load_json(path, default):
