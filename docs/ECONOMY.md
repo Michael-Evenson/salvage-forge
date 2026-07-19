@@ -51,8 +51,8 @@ DEMAND / PRICE FLOW
    bike trailer)                          = price signal)
 
   MATCHER's shortfall feeds back to:
-    -> SALVAGE  value_tier reflects real demand, not resale heuristics  (stage 2)
-    -> LEDGER   credit value becomes a function of live scarcity        (stage 4)
+    -> SALVAGE  flags items in demand, layered on value_tier  (stage 2, shipped)
+    -> LEDGER   credit value becomes a function of live scarcity  (stage 4)
 
 CO-EVOLUTION  (stage 5)
 
@@ -122,9 +122,9 @@ specification.
 
 | Phase | Exists today | Gap to close |
 |---|---|---|
-| **Salvage** | Two-tier recognition/learning (`intake.py`): `SEED_LIBRARY` seeds tier-1, tier-2 analysis is saved back to `library.json`. `value_tier` is assigned by prompt heuristic (`scan_prompt`'s "unopened packaging suggests grade A and possible resale tier"). | `value_tier` is resale-heuristic-driven, not demand-driven — the exact gap `docs/BENCHMARK.md` surfaced. Salvage's "KNOWN LIBRARY" index is its own item history, not Forge's build catalog — the cross-phase learning coupling described above doesn't exist. |
+| **Salvage** | Two-tier recognition/learning (`intake.py`): `SEED_LIBRARY` seeds tier-1, tier-2 analysis is saved back to `library.json`. `value_tier` is assigned by prompt heuristic (`scan_prompt`'s "unopened packaging suggests grade A and possible resale tier"). Stage 2 shipped ([#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`): `load_shortfall()`/`match_demand()` read `matcher/shortfall.json` and match scanned items on `(category, family)`; a match layers a separate `** IN DEMAND **` stamp in `show_passport()` alongside — not replacing — the resale-based stamp. Computed fresh and shown live only; never persisted to `library.json` or `inventory.csv`. | `value_tier` itself is still the model's resale-heuristic judgment, unchanged — the demand signal sits alongside it as a second, separate axis, not merged into one price. Folding both into a single continuous market value is stage 4, below. Salvage's "KNOWN LIBRARY" index is still its own item history, not Forge's build catalog — the cross-phase learning coupling described in the Salvage phase section above (Salvage learning what's worth cataloging from Forge's catalog) is a *different* coupling than the demand signal, and it still doesn't exist in code (stage 5). |
 | **Forge** | Three hand-written seed templates (`dome_3v`, `cold_frame`, `bike_trailer`) in `matcher.jl`. | Templates are hardcoded Julia functions. Nothing proposes a *new* template from observed salvage patterns — stage 5 below. |
-| **Matcher (price discovery)** | Stage 1 shipped ([#6](https://github.com/Michael-Evenson/salvage-forge/pull/6), `8383cac`). `match_template` returns structured `Vector{ShortfallLine}` detail (kind/name/amount/families) for every demand type alongside the original `shortfall::Dict{String,Int}` (unchanged, still drives the stdout wish-list). `BulkDemand` is now a first-class demand type — matched via capacity check like `SheetDemand` (no cutting-stock combinatorics apply to "enough total quantity") — so a `bulk` item (e.g. the wire spool from `docs/BENCHMARK.md`) is visible to matching and can appear in shortfall. A "Utility wire run" template exercises it. `main()` writes the full per-template result set to `matcher/shortfall.json` (gitignored), additive to the existing stdout text. | Nothing reads the artifact yet — Salvage's `value_tier` still comes from the resale heuristic, not this signal (stage 2, below). Also worth naming honestly rather than hiding: bulk quantity reuses `StockPiece.length` (documented inline) rather than a dedicated field, since the CSV schema is a hard interface per `CLAUDE.md` contract #1 — a deliberate reuse, not an oversight, but a real constraint on how bulk data is represented. |
+| **Matcher (price discovery)** | Stage 1 shipped ([#6](https://github.com/Michael-Evenson/salvage-forge/pull/6), `8383cac`). `match_template` returns structured `Vector{ShortfallLine}` detail (kind/name/amount/families) for every demand type alongside the original `shortfall::Dict{String,Int}` (unchanged, still drives the stdout wish-list). `BulkDemand` is now a first-class demand type — matched via capacity check like `SheetDemand` (no cutting-stock combinatorics apply to "enough total quantity") — so a `bulk` item (e.g. the wire spool from `docs/BENCHMARK.md`) is visible to matching and can appear in shortfall. A "Utility wire run" template exercises it. `main()` writes the full per-template result set to `matcher/shortfall.json` (gitignored), additive to the existing stdout text. | Stage 2 (shipped, [#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`) now reads this artifact — see the Salvage row. Still open: nothing writes back to `shortfall.json`, and it's a one-shot snapshot rather than continuously recomputed as the reservoir changes — that's stage 4's live market pricing. Also worth naming honestly rather than hiding: bulk quantity reuses `StockPiece.length` (documented inline) rather than a dedicated field, since the CSV schema is a hard interface per `CLAUDE.md` contract #1 — a deliberate reuse, not an oversight, but a real constraint on how bulk data is represented. |
 | **Ledger** | Nothing. | Everything: schema, deposit/credit/draw/earmark operations, balance persistence, append-only log — stage 3 below. |
 
 ## Ledger mechanics
@@ -281,17 +281,35 @@ before any of it is usable.
      type for a continuous quantity, folded into the same
      shortfall/feasible mechanism as the other three demand types. Bulk
      items can now appear in `shortfall.json` like any other category.
-2. **Close the value loop.** Salvage reads the shortfall artifact from
-   stage 1 so `value_tier` reflects live demand instead of the resale
-   heuristic in `scan_prompt`. This is the fix to the exact divergence
-   `docs/BENCHMARK.md` documented, and the roadmap item already recorded
-   in [`CLAUDE.md`](../CLAUDE.md) and
+2. **Close the value loop. Shipped** ([#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`).
+   Salvage reads the shortfall artifact from stage 1: `load_shortfall()`
+   finds `matcher/shortfall.json` (env-overridable via `SHORTFALL_PATH`,
+   falling back to pre-stage-2 behavior if absent), `match_demand()`
+   matches a scanned item's `(category, family)` against it, and a match
+   layers a distinct `** IN DEMAND — FORGE NEEDS THIS **` stamp on top
+   of the existing resale-based stamp in `show_passport()`. It does
+   *not* overwrite `value_tier` or `est_value_usd` — the resale
+   heuristic in `scan_prompt` is untouched — and the demand signal is
+   never persisted to `library.json` or `inventory.csv`: it's a live
+   market snapshot, recomputed fresh every run rather than a durable
+   fact about the material. (Folding demand and resale into one
+   continuous market price is stage 4, below — this stage layers a
+   second axis on display, it doesn't merge the two.) This is the fix
+   to the exact divergence `docs/BENCHMARK.md` documented, and the
+   roadmap item already recorded in [`CLAUDE.md`](../CLAUDE.md) and
    [`docs/ARCHITECTURE.md`](ARCHITECTURE.md).
+   - **Sequencing note:** `shortfall.json` is gitignored runtime
+     output, not checked-in data — the matcher has to actually run
+     (`cd matcher && julia matcher.jl sample_inventory.csv`) before
+     there's anything for intake to read. Matcher first, then intake;
+     not a bug, just the data flow, but easy to trip on if run in the
+     wrong order.
 3. **Ledger v0.** Minimal: deposit banks credit, a build spends it,
    balances persist, append-only log. Deliberately ordered *after*
-   stages 1–2, not before: by the time deposits get credited, the item's
-   `value_tier` already reflects real demand (a scarcity snapshot at
-   intake time), so Ledger v0 launches pricing deposits against a
+   stages 1–2, not before: by the time deposits get credited, the
+   item's demand signal (stage 2 — surfaced alongside `value_tier`, not
+   merged into it) is already available as a scarcity snapshot at
+   intake time, so Ledger v0 can launch pricing deposits against a
    genuine signal instead of flat, meaningless credit-per-item numbers.
 4. **Market pricing.** Credit value becomes a live function of matcher
    scarcity, rather than the snapshot baked in at intake time in stage
