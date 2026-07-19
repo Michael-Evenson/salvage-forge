@@ -110,6 +110,17 @@ the same parametric-by-design property that already lets
 `best_dome_radius` say "the largest dome this pile supports" —
 applied to carbon instead of size.
 
+**Displayed, not stored.** That advertised range is a *presentation* of
+the live computation above, generated fresh whenever it's shown to
+someone — not a fact computed once and cached back onto the `Template`
+as if it were a persisted property of the blueprint. The moment a range
+gets stored and reused instead of recomputed, it silently drifts from
+whatever the reservoir actually holds right now, recreating exactly the
+staleness trap `ECONOMY.md`'s stage 2 was careful to avoid for the
+demand signal (never persisted, "computed fresh and shown live only").
+A blueprint can *advertise* a range at the moment someone asks; it
+cannot *own* one.
+
 **Flag, not a design: carbon as a matcher optimization axis.** Today
 `match_template`'s objective minimizes shortfall, then piece count
 (`min 10_000 * Σs[k] + Σy[i]`) — it has no notion of which qualifying
@@ -137,7 +148,7 @@ out of scope on purpose.
 |---|---|---|
 | **Content** | Salvage | Persisted — passport-level, per item (stage A) |
 | **Duration** | Forge | Persisted — template-level, per blueprint (stage B) |
-| **Carbon potential** | Matcher | Live, parametric range — recomputed against actual current inventory each time a template is evaluated; never persisted |
+| **Carbon potential** | Matcher | Live, parametric range — recomputed against actual current inventory every time it's shown, even for display/advertising purposes; never cached or persisted back onto the `Template` |
 
 ## Treatments: Forge's second capability
 
