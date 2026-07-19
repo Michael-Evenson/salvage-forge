@@ -7,6 +7,14 @@ fifth phase.
 
 ## The reframe
 
+Salvage Forge exists for two co-equal reasons, not one: a sovereign
+materials commons, and a carbon-capture engine that works by diverting
+material from waste into durable construction. Neither is subordinate
+to the other. This document is the materials-commons half of that
+mission — pricing, credit, the ledger. [`docs/CARBON.md`](CARBON.md) is
+the carbon half: how diversion into a build translates into carbon
+actually kept out of the atmosphere, and for how long.
+
 Salvage Forge is not "photograph waste, get a blueprint." It's a
 **materials commons with an internal economy**: donors deposit salvaged
 materials and earn credit; builders spend credit to draw materials from
