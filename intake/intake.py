@@ -20,6 +20,15 @@ Files it maintains (created on first run, in the working directory):
     library.json     the learned material-passport library
     inventory.csv    rows in the schema matcher.jl reads
 
+Files it reads, if present (never required, never invokes Julia itself):
+    matcher/shortfall.json   matcher.jl's price signal (docs/ECONOMY.md
+                             build stage 1) -- when found, items whose
+                             (category, family) match an open shortfall
+                             line get flagged "IN DEMAND" in the printed
+                             passport, a separate axis from value_tier
+                             (see docs/BENCHMARK.md). Override the search
+                             path with SHORTFALL_PATH.
+
 Dependencies:  pip install requests pillow pillow-heif
 """
 
@@ -211,6 +220,43 @@ def load_json(path, default):
     except (FileNotFoundError, json.JSONDecodeError):
         return default
 
+# ---------------------------------------------------------------- demand signal (stage 2)
+# docs/ECONOMY.md build stage 2: close the value loop. The matcher (Julia)
+# writes shortfall.json (stage 1); intake (Python) reads the file -- the
+# decoupled "wish-list file" seam the design calls for. Never invokes Julia,
+# never crashes if the file is absent or stale: absent just means intake runs
+# exactly as it did before stage 2 existed.
+def load_shortfall():
+    """Find and parse the matcher's price signal. Returns (data, path_used) or
+    (None, None) if no candidate parses -- caller falls back to old behavior."""
+    candidates = [p for p in [os.environ.get("SHORTFALL_PATH"),
+                               "matcher/shortfall.json", "shortfall.json",
+                               "../matcher/shortfall.json"] if p]
+    for path in candidates:
+        data = load_json(path, None)
+        if data is not None:
+            return data, path
+    return None, None
+
+def flatten_shortfall(data):
+    """shortfall.json is one record per template, each with its own
+    shortfall list; flatten to one list of demand lines, keeping which
+    template each came from (for the human-readable "why")."""
+    return [{"template": tpl.get("template", "?"), "kind": sl.get("kind"),
+             "name": sl.get("name"), "amount": sl.get("amount"),
+             "families": sl.get("families", [])}
+            for tpl in data.get("templates", []) for sl in tpl.get("shortfall", [])]
+
+def match_demand(category, family, entries):
+    """An item is in demand when its (category, family) satisfies an open
+    shortfall line. Matcher's `kind` (linear/sheet/part/bulk) is the same
+    vocabulary as intake's `category` -- match on both, not family alone,
+    so a family-name collision across categories can't false-positive."""
+    return [e for e in entries if e["kind"] == category and family in e["families"]]
+
+def fmt_amount(x):
+    return str(int(x)) if float(x).is_integer() else f"{x:.1f}"
+
 def save_library(lib):
     with open(LIB_PATH, "w") as f: json.dump(lib, f, indent=1)
 
@@ -227,10 +273,16 @@ def mk_row(p):
             f"{p.get('length_in',0)},{p.get('width_in',0)},{p.get('qty',1)},{p.get('condition','C')}")
 
 # ---------------------------------------------------------------- passport print
-def show_passport(p, tier, seen):
+def show_passport(p, tier, seen, demand=None):
+    """demand: list of matching shortfall entries from match_demand(), or None/[]
+    if no match -- never persisted, computed fresh and shown live only (see
+    load_shortfall). Resale-based value_tier and demand-based match are two
+    separate axes (docs/BENCHMARK.md); each gets its own stamp, never merged."""
     stamp = f"KNOWN ITEM — ANALYSIS SKIPPED (seen {seen}x)" if tier == 1 else "NEW ITEM — ANALYZED + LEARNED"
     if p.get("value_tier") == "resale":
         stamp += "  ** HIGH VALUE — HOLD FOR RESALE/CREDIT **"
+    if demand:
+        stamp += "  ** IN DEMAND — FORGE NEEDS THIS **"
     print(f"\n  ┌─ {p.get('name','?')}  [{stamp}]")
     for k in ("description", "id_basis", "could_be", "dims_note", "ask",
               "composition", "structural", "thermal", "hazards", "reuse"):
@@ -240,6 +292,10 @@ def show_passport(p, tier, seen):
     if p.get("value_tier"):
         print(f"  │ {'value':<12} tier: {p['value_tier']}"
               + (f" · est ${p['est_value_usd']}" if p.get("est_value_usd") else ""))
+    if demand:
+        why = "; ".join(f"{m['template']} needs {fmt_amount(m['amount'])} more {p.get('family','?')}"
+                        for m in demand)
+        print(f"  │ {'demand':<12} {why}")
     print(f"  └ {p.get('category','?')}/{p.get('family','?')} · "
           f"{p.get('length_in','?')}\"x{p.get('width_in','?')}\" · qty {p.get('qty',1)} · grade {p.get('condition','?')}")
 
@@ -267,13 +323,36 @@ def main():
 
     verbose = "--verbose" in flags
 
+    signal, signal_path = load_shortfall()
+    demand_entries = flatten_shortfall(signal) if signal else []
+    if signal:
+        print(f"DEMAND  read {len(demand_entries)} shortfall line(s) from {signal_path} "
+              f"(generated {signal.get('generated_at', '?')})")
+    else:
+        print("DEMAND  no shortfall.json found -- value_tier stays resale-heuristic only")
+
     if "--dry-run" in flags:
         # Exercise the whole pipeline with a canned response — no API needed.
+        # Third item is deliberately value_tier:scrap with family "wheel_20":
+        # against the real shortfall.json generated from sample_inventory.csv,
+        # its part/wheel_20 shortfall is reliably present (stage-1 tested), so
+        # this one item proves the demand-match path with genuine matcher
+        # output -- and lands the actual thesis, since a "scrap"-tier item
+        # still lighting up "IN DEMAND" is exactly the resale-vs-demand
+        # divergence docs/BENCHMARK.md found. "Test widget" below (family
+        # test_part) is the free negative-case control -- no real shortfall
+        # will ever contain that family.
         raw = ('{"items":[{"known":"seed-amzn-box","qty":2,"condition":"B"},'
                '{"name":"Test widget","keywords":["test"],"category":"part","family":"test_part",'
                '"description":"dry-run item","length_in":10,"width_in":2,"qty":1,"condition":"B",'
                '"composition":["testium"],"structural":"n/a","thermal":"n/a","hazards":"none",'
-               '"reuse":["testing"],"est_value_usd":120,"value_tier":"resale","confidence":"high"}]}')
+               '"reuse":["testing"],"est_value_usd":120,"value_tier":"resale","confidence":"high"},'
+               '{"name":"20in bike wheel (spare)","keywords":["wheel","spare wheel"],'
+               '"category":"part","family":"wheel_20",'
+               '"description":"dry-run item -- demonstrates demand-loop match vs real shortfall.json",'
+               '"length_in":0,"width_in":0,"qty":1,"condition":"B",'
+               '"composition":["rubber tire","steel rim"],"structural":"n/a","thermal":"n/a","hazards":"none",'
+               '"reuse":["bike trailer wheel"],"est_value_usd":0,"value_tier":"scrap","confidence":"high"}]}')
         print("DRYRUN  using canned model response")
     else:
         print(f"SCAN    one pass vs {len(library)} learned items...")
@@ -305,13 +384,15 @@ def main():
                  "qty": it.get("qty", 1),
                  "condition": it.get("condition", entry["passport"].get("condition", "C"))}
             rows.append(mk_row(p))
-            show_passport(p, 1, entry["seen"])
+            demand = match_demand(p.get("category"), p.get("family"), demand_entries)
+            show_passport(p, 1, entry["seen"], demand)
         elif it.get("name"):
             eid = f"learned-{int(time.time()*1000)}-{random.randint(0,999)}"
             library.append({"id": eid, "name": it["name"],
                             "keywords": it.get("keywords", []), "seen": 1, "passport": it})
             rows.append(mk_row(it))
-            show_passport(it, 2, 1)
+            demand = match_demand(it.get("category"), it.get("family"), demand_entries)
+            show_passport(it, 2, 1, demand)
 
     save_library(library)
     if rows:
