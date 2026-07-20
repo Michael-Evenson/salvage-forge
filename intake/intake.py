@@ -86,6 +86,78 @@ SEED_LIBRARY = [
        "reuse": ["1x4 stock for matcher", "skid foundations", "compost bins"]}},
 ]
 
+# ---------------------------------------------------------------- carbon (docs/CARBON.md stage A)
+# Per-item carbon content: family -> mass -> kg CO2e, the Salvage half of
+# docs/CARBON.md's "content x duration" mechanic. Deliberately PERSISTED
+# (unlike the stage-2 demand signal): carbon content is closer to a stable
+# material property than a live market snapshot -- more like structural/
+# thermal below than like value_tier's demand flag.
+#
+# kg_per_unit is a MASS-PER-EXISTING-PASSPORT-DIMENSION coefficient, not a
+# true material density -- intake has no thickness/cross-section field
+# (docs/CARBON.md's "Relationship to existing code" table already names
+# this gap), so this multiplies whichever dimension the item's category
+# already provides: length_in for linear/bulk, length_in*width_in for
+# sheet, a flat per-unit mass for part. "wire" is the one exception: its
+# length_in holds FEET, not inches, matching matcher.jl's StockPiece
+# convention for :bulk categories (see sample_inventory.csv's own note on
+# the same quirk).
+#
+# kg_co2e_per_kg is a first-pass approximation in the spirit of ICE
+# (Inventory of Carbon & Energy, circularecology.com) / EC3
+# (buildingtransparency.org) published cradle-to-gate factors --
+# ballparked from public secondary sources, NOT looked up against a
+# licensed ICE/EC3 dataset. Good enough for internal accounting
+# (docs/CARBON.md's "estimation vs verification"); replace with real
+# database lookups before any external claim. flavor distinguishes
+# sequestered (biogenic, physically locked in the material) from avoided/
+# embodied (emissions dodged by not manufacturing virgin replacement) --
+# docs/CARBON.md treats conflating them as a greenwashing trap.
+CARBON_COEFFICIENTS = {
+    "corrugated": {"kg_per_unit": 0.00042, "kg_co2e_per_kg": 0.94, "flavor": "sequestered"},
+    "pallet":     {"kg_per_unit": 0.0237,  "kg_co2e_per_kg": 0.45, "flavor": "sequestered"},
+    "framing":    {"kg_per_unit": 0.0413,  "kg_co2e_per_kg": 0.42, "flavor": "sequestered"},
+    "plywood":    {"kg_per_unit": 0.0045,  "kg_co2e_per_kg": 0.60, "flavor": "sequestered"},
+    "osb":        {"kg_per_unit": 0.0044,  "kg_co2e_per_kg": 0.60, "flavor": "sequestered"},
+    "window":     {"kg_per_unit": 0.0070,  "kg_co2e_per_kg": 0.85, "flavor": "avoided"},
+    "conduit":    {"kg_per_unit": 0.0095,  "kg_co2e_per_kg": 1.55, "flavor": "avoided"},
+    "wire":       {"kg_per_unit": 0.0090,  "kg_co2e_per_kg": 2.50, "flavor": "avoided"},
+    "hinge":      {"kg_per_unit": 0.08,    "kg_co2e_per_kg": 1.55, "flavor": "avoided"},
+    "tarp":       {"kg_per_unit": 1.2,     "kg_co2e_per_kg": 2.50, "flavor": "avoided"},
+    "wheel_26":   {"kg_per_unit": 2.0,     "kg_co2e_per_kg": 2.50, "flavor": "avoided"},
+    "wheel_20":   {"kg_per_unit": 1.6,     "kg_co2e_per_kg": 2.50, "flavor": "avoided"},
+}
+
+def carbon_estimate(passport):
+    """Stage A (docs/CARBON.md): deterministic content estimate from the
+    coefficient table above -- no model judgment involved, family and the
+    dimensions already on the passport are enough. Returns None if the
+    family isn't in the table: no coefficient, no claim, never a guessed
+    default."""
+    coef = CARBON_COEFFICIENTS.get(passport.get("family"))
+    if not coef:
+        return None
+    category = passport.get("category")
+    length_in = passport.get("length_in") or 0
+    width_in = passport.get("width_in") or 0
+    if category in ("linear", "bulk"):
+        mass_kg = length_in * coef["kg_per_unit"]
+    elif category == "sheet":
+        mass_kg = length_in * width_in * coef["kg_per_unit"]
+    elif category == "part":
+        mass_kg = coef["kg_per_unit"]
+    else:
+        return None
+    if mass_kg <= 0:
+        return None
+    return {
+        "est_carbon_kg_co2e": round(mass_kg * coef["kg_co2e_per_kg"], 3),
+        "est_carbon_flavor": coef["flavor"],
+        "carbon_note": f"estimated: {passport['family']} coefficient table, "
+                        f"~{round(mass_kg, 3)}kg mass basis (first-pass, not "
+                        f"audit-grade -- docs/CARBON.md)",
+    }
+
 # ---------------------------------------------------------------- image prep
 def prep_image(path, max_px=1400, quality=82):
     """Downscale + re-encode to JPEG. Returns (base64_str, info_str)."""
@@ -297,7 +369,8 @@ def show_passport(p, tier, seen, demand=None):
         stamp += "  ** IN DEMAND — FORGE NEEDS THIS **"
     print(f"\n  ┌─ {p.get('name','?')}  [{stamp}]")
     for k in ("description", "id_basis", "could_be", "dims_note", "ask",
-              "composition", "structural", "thermal", "hazards", "reuse"):
+              "composition", "structural", "thermal", "hazards", "reuse",
+              "carbon_note"):
         v = p.get(k)
         if isinstance(v, list): v = " · ".join(str(x) for x in v)
         if v: print(f"  │ {k:<12} {v}")
@@ -308,6 +381,9 @@ def show_passport(p, tier, seen, demand=None):
         why = "; ".join(f"{m['template']} needs {fmt_amount(m['amount'])} more {p.get('family','?')}"
                         for m in demand)
         print(f"  │ {'demand':<12} {why}")
+    if p.get("est_carbon_kg_co2e") is not None:
+        print(f"  │ {'carbon':<12} ~{p['est_carbon_kg_co2e']} kg CO2e "
+              f"({p.get('est_carbon_flavor', '?')}, estimated)")
     print(f"  └ {p.get('category','?')}/{p.get('family','?')} · "
           f"{p.get('length_in','?')}\"x{p.get('width_in','?')}\" · qty {p.get('qty',1)} · grade {p.get('condition','?')}")
 
@@ -392,6 +468,12 @@ def main():
         if it.get("known") and any(e["id"] == it["known"] for e in library):
             entry = next(e for e in library if e["id"] == it["known"])
             entry["seen"] = entry.get("seen", 0) + 1
+            if "est_carbon_kg_co2e" not in entry["passport"]:
+                # Backfills SEED_LIBRARY entries and any pre-stage-A library.json
+                # the first time they're hit -- persisted onto the STORED entry
+                # (not just the local `p` view) so it's computed once, ever.
+                est = carbon_estimate(entry["passport"])
+                if est: entry["passport"].update(est)
             p = {**entry["passport"], "name": entry["name"],
                  "qty": it.get("qty", 1),
                  "condition": it.get("condition", entry["passport"].get("condition", "C"))}
@@ -399,6 +481,8 @@ def main():
             demand = match_demand(p.get("category"), p.get("family"), demand_entries)
             show_passport(p, 1, entry["seen"], demand)
         elif it.get("name"):
+            est = carbon_estimate(it)
+            if est: it.update(est)
             eid = f"learned-{int(time.time()*1000)}-{random.randint(0,999)}"
             library.append({"id": eid, "name": it["name"],
                             "keywords": it.get("keywords", []), "seen": 1, "passport": it})
