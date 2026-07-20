@@ -68,7 +68,7 @@ CO-EVOLUTION  (stage 5)
   learns what's worth cataloging            proposes new templates from
   from Forge's current catalog              recurring salvage patterns
 
-CREDIT FLOW  (LEDGER, stage 3)
+CREDIT FLOW  (LEDGER, stage 3, shipped)
 
   donor deposit --> credit banked (permanent, never expires)
   builder draw  --> credit spent, balance debited
@@ -123,8 +123,15 @@ Records deposits, credits, draws, and reservations; settles balances.
 The reservoir decouples *contribution* from *consumption* — nobody has
 to personally source every part of their own build; they draw against
 the pool using credit earned (or bought) from any past contribution.
-Does not exist in code yet — this doc's mechanics section below is its
-specification.
+**Shipped** ([#13](https://github.com/Michael-Evenson/salvage-forge/pull/13), `6ffac8e`)
+as `ledger/ledger.py` — the mechanics section below is now its
+implemented specification, not just a plan. Deposit/credit/draw/
+project/earmark/certified-work are append-only, hash-chained records;
+balances and earmark status are computed by replaying the log, never
+stored as separately-mutable numbers. Not yet wired into Salvage or
+the Matcher, though — nothing in `intake.py` or `matcher.jl` calls
+into the ledger yet, and credit amounts are still caller-supplied
+rather than priced (stage 4, below).
 
 ## Relationship to existing code
 
@@ -133,7 +140,7 @@ specification.
 | **Salvage** | Two-tier recognition/learning (`intake.py`): `SEED_LIBRARY` seeds tier-1, tier-2 analysis is saved back to `library.json`. `value_tier` is assigned by prompt heuristic (`scan_prompt`'s "unopened packaging suggests grade A and possible resale tier"). Stage 2 shipped ([#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`): `load_shortfall()`/`match_demand()` read `matcher/shortfall.json` and match scanned items on `(category, family)`; a match layers a separate `** IN DEMAND **` stamp in `show_passport()` alongside — not replacing — the resale-based stamp. Computed fresh and shown live only; never persisted to `library.json` or `inventory.csv`. | `value_tier` itself is still the model's resale-heuristic judgment, unchanged — the demand signal sits alongside it as a second, separate axis, not merged into one price. Folding both into a single continuous market value is stage 4, below. Salvage's "KNOWN LIBRARY" index is still its own item history, not Forge's build catalog — the cross-phase learning coupling described in the Salvage phase section above (Salvage learning what's worth cataloging from Forge's catalog) is a *different* coupling than the demand signal, and it still doesn't exist in code (stage 5). |
 | **Forge** | Three hand-written seed templates (`dome_3v`, `cold_frame`, `bike_trailer`) in `matcher.jl`. | Templates are hardcoded Julia functions. Nothing proposes a *new* template from observed salvage patterns — stage 5 below. |
 | **Matcher (price discovery)** | Stage 1 shipped ([#6](https://github.com/Michael-Evenson/salvage-forge/pull/6), `8383cac`). `match_template` returns structured `Vector{ShortfallLine}` detail (kind/name/amount/families) for every demand type alongside the original `shortfall::Dict{String,Int}` (unchanged, still drives the stdout wish-list). `BulkDemand` is now a first-class demand type — matched via capacity check like `SheetDemand` (no cutting-stock combinatorics apply to "enough total quantity") — so a `bulk` item (e.g. the wire spool from `docs/BENCHMARK.md`) is visible to matching and can appear in shortfall. A "Utility wire run" template exercises it. `main()` writes the full per-template result set to `matcher/shortfall.json` (gitignored), additive to the existing stdout text. | Stage 2 (shipped, [#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`) now reads this artifact — see the Salvage row. Still open: nothing writes back to `shortfall.json`, and it's a one-shot snapshot rather than continuously recomputed as the reservoir changes — that's stage 4's live market pricing. Also worth naming honestly rather than hiding: bulk quantity reuses `StockPiece.length` (documented inline) rather than a dedicated field, since the CSV schema is a hard interface per `CLAUDE.md` contract #1 — a deliberate reuse, not an oversight, but a real constraint on how bulk data is represented. |
-| **Ledger** | Nothing. | Everything: schema, deposit/credit/draw/earmark operations, balance persistence, append-only log — stage 3 below. |
+| **Ledger** | Stage 3 shipped ([#13](https://github.com/Michael-Evenson/salvage-forge/pull/13), `6ffac8e`): `ledger/ledger.py` implements deposit/credit/draw/project/project_status/earmark/certified_work as append-only, SHA-256 hash-chained records (`ledger/ledger.jsonl`, gitignored like the other runtime artifacts); `Ledger.balance()`/`earmark_status()` are pure replay functions, never stored counters. Backend-agnostic by construction (`JsonlFileBackend` behind a two-method `append`/`read_all` contract, same discipline as `call_claude()`/`call_ollama()`). | Nothing in `intake.py` or `matcher.jl` calls into the ledger yet — it's a standalone module, not yet part of the four phases' actual data path. `credit_amount` is always caller-supplied; the ledger has no valuation logic of its own (stage 4, market pricing, below). The demand-type split this project/earmark model implies (self-specified vs. market-value credit) is a flagged follow-up, not built. |
 
 ## Ledger mechanics
 
@@ -232,6 +239,15 @@ integrity without touching tokens, gas, wallets, or the regulatory
 exposure those bring — keeping "Ledger v0" (stage 3, below) genuinely
 achievable.
 
+**Shipped as exactly that.** `ledger/ledger.py`'s "signed" is a SHA-256
+**hash chain** — each record's hash covers its own content plus the
+previous record's hash, so editing any past line breaks every hash
+after it — not signatures identifying a specific party via asymmetric
+cryptography. That's the right bar for a single local operator's own
+file, tamper-*evident* rather than sender-authenticated; real
+per-party signing becomes relevant exactly at the multi-community-
+federation point described below, not before.
+
 Why blockchain isn't the default, specifically:
 
 1. **Three of the four phases are off-chain regardless.** Matcher is
@@ -312,13 +328,27 @@ before any of it is usable.
      there's anything for intake to read. Matcher first, then intake;
      not a bug, just the data flow, but easy to trip on if run in the
      wrong order.
-3. **Ledger v0.** Minimal: deposit banks credit, a build spends it,
-   balances persist, append-only log. Deliberately ordered *after*
-   stages 1–2, not before: by the time deposits get credited, the
-   item's demand signal (stage 2 — surfaced alongside `value_tier`, not
-   merged into it) is already available as a scarcity snapshot at
-   intake time, so Ledger v0 can launch pricing deposits against a
-   genuine signal instead of flat, meaningless credit-per-item numbers.
+3. **Ledger v0. Shipped** ([#13](https://github.com/Michael-Evenson/salvage-forge/pull/13), `6ffac8e`).
+   `ledger/ledger.py`: deposit banks credit, a draw spends it, balances
+   persist by replaying an append-only, hash-chained log — never a
+   separately-mutable stored number. Also shipped: project declaration,
+   earmark (with the generic, type-agnostic activity tracking the doc
+   specifies — any record carrying `project_id` resets the inactivity
+   clock, so a future blueprint-production event needs no ledger
+   changes to count as activity), and a contractor's certified-work
+   record, kept separate from a DIY builder's draws. Deliberately
+   ordered *after* stages 1–2 for the reason already given: by the time
+   deposits get credited, the item's demand signal is available as a
+   scarcity snapshot — though Ledger v0 itself doesn't consume it yet;
+   `credit_amount` is still caller-supplied, not computed from that
+   signal (stage 4, below, is where a real valuation function would go).
+   - **Two things this stage deliberately left open:** the ledger isn't
+     called from `intake.py` or `matcher.jl` yet — it's a standalone
+     module the rest of the system doesn't talk to, real integration
+     work rather than a formality. And the demand-type split this
+     project/earmark model implies — should a donor's self-specified
+     value or the Matcher's eventual price govern a credit amount? — is
+     a flagged follow-up, not decided or built here.
 4. **Market pricing.** Credit value becomes a live function of matcher
    scarcity, rather than the snapshot baked in at intake time in stage
    2 — a build that gets fulfilled changes what's scarce, and unfulfilled
