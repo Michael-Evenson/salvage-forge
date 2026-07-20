@@ -68,13 +68,18 @@ CO-EVOLUTION  (stage 5)
   learns what's worth cataloging            proposes new templates from
   from Forge's current catalog              recurring salvage patterns
 
-CREDIT FLOW  (LEDGER, stage 3, shipped)
+CREDIT FLOW  (LEDGER, stage 3, shipped -- Salvage-side wiring shipped too)
 
-  donor deposit --> credit banked (permanent, never expires)
-  builder draw  --> credit spent, balance debited
-  earmark       --> leased claim on RESERVOIR stock, tied to an active
-                     declared project; expires back to RESERVOIR on
-                     inactivity
+  donor deposit            --> credit banked (permanent, never expires)
+  anonymous donor deposit  --> credited to the reserved COMMONS pool,
+                                not a person (--donor commons)
+  deposit feeds a project  --> attributed + counts as project activity
+                                (resets the earmark clock) -- does NOT
+                                reserve the material by itself
+  earmark (explicit)       --> leased claim on RESERVOIR stock, tied to
+                                an active declared project; expires back
+                                to RESERVOIR on inactivity
+  builder draw             --> credit spent, balance debited
 ```
 
 ### 1. Salvage — "What I Have"
@@ -128,10 +133,15 @@ as `ledger/ledger.py` — the mechanics section below is now its
 implemented specification, not just a plan. Deposit/credit/draw/
 project/earmark/certified-work are append-only, hash-chained records;
 balances and earmark status are computed by replaying the log, never
-stored as separately-mutable numbers. Not yet wired into Salvage or
-the Matcher, though — nothing in `intake.py` or `matcher.jl` calls
-into the ledger yet, and credit amounts are still caller-supplied
-rather than priced (stage 4, below).
+stored as separately-mutable numbers. **Salvage-side wiring shipped**
+too ([#15](https://github.com/Michael-Evenson/salvage-forge/pull/15)):
+a successful intake now records a real deposit — `intake.py`'s
+`--donor` calls into the ledger, `--project` attributes it to a
+declared project, `--earmark` additionally reserves the material. The
+Matcher/Forge side is still unwired, though — nothing in `matcher.jl`
+calls into the ledger yet (a draw or a completed build doesn't record
+anything), and credit amounts are still caller-supplied rather than
+priced (stage 4, below).
 
 ## Relationship to existing code
 
@@ -139,8 +149,8 @@ rather than priced (stage 4, below).
 |---|---|---|
 | **Salvage** | Two-tier recognition/learning (`intake.py`): `SEED_LIBRARY` seeds tier-1, tier-2 analysis is saved back to `library.json`. `value_tier` is assigned by prompt heuristic (`scan_prompt`'s "unopened packaging suggests grade A and possible resale tier"). Stage 2 shipped ([#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`): `load_shortfall()`/`match_demand()` read `matcher/shortfall.json` and match scanned items on `(category, family)`; a match layers a separate `** IN DEMAND **` stamp in `show_passport()` alongside — not replacing — the resale-based stamp. Computed fresh and shown live only; never persisted to `library.json` or `inventory.csv`. | `value_tier` itself is still the model's resale-heuristic judgment, unchanged — the demand signal sits alongside it as a second, separate axis, not merged into one price. Folding both into a single continuous market value is stage 4, below. Salvage's "KNOWN LIBRARY" index is still its own item history, not Forge's build catalog — the cross-phase learning coupling described in the Salvage phase section above (Salvage learning what's worth cataloging from Forge's catalog) is a *different* coupling than the demand signal, and it still doesn't exist in code (stage 5). |
 | **Forge** | Three hand-written seed templates (`dome_3v`, `cold_frame`, `bike_trailer`) in `matcher.jl`. | Templates are hardcoded Julia functions. Nothing proposes a *new* template from observed salvage patterns — stage 5 below. |
-| **Matcher (price discovery)** | Stage 1 shipped ([#6](https://github.com/Michael-Evenson/salvage-forge/pull/6), `8383cac`). `match_template` returns structured `Vector{ShortfallLine}` detail (kind/name/amount/families) for every demand type alongside the original `shortfall::Dict{String,Int}` (unchanged, still drives the stdout wish-list). `BulkDemand` is now a first-class demand type — matched via capacity check like `SheetDemand` (no cutting-stock combinatorics apply to "enough total quantity") — so a `bulk` item (e.g. the wire spool from `docs/BENCHMARK.md`) is visible to matching and can appear in shortfall. A "Utility wire run" template exercises it. `main()` writes the full per-template result set to `matcher/shortfall.json` (gitignored), additive to the existing stdout text. | Stage 2 (shipped, [#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`) now reads this artifact — see the Salvage row. Still open: nothing writes back to `shortfall.json`, and it's a one-shot snapshot rather than continuously recomputed as the reservoir changes — that's stage 4's live market pricing. Also worth naming honestly rather than hiding: bulk quantity reuses `StockPiece.length` (documented inline) rather than a dedicated field, since the CSV schema is a hard interface per `CLAUDE.md` contract #1 — a deliberate reuse, not an oversight, but a real constraint on how bulk data is represented. |
-| **Ledger** | Stage 3 shipped ([#13](https://github.com/Michael-Evenson/salvage-forge/pull/13), `6ffac8e`): `ledger/ledger.py` implements deposit/credit/draw/project/project_status/earmark/certified_work as append-only, SHA-256 hash-chained records (`ledger/ledger.jsonl`, gitignored like the other runtime artifacts); `Ledger.balance()`/`earmark_status()` are pure replay functions, never stored counters. Backend-agnostic by construction (`JsonlFileBackend` behind a two-method `append`/`read_all` contract, same discipline as `call_claude()`/`call_ollama()`). | Nothing in `intake.py` or `matcher.jl` calls into the ledger yet — it's a standalone module, not yet part of the four phases' actual data path. `credit_amount` is always caller-supplied; the ledger has no valuation logic of its own (stage 4, market pricing, below). The demand-type split this project/earmark model implies (self-specified vs. market-value credit) is a flagged follow-up, not built. |
+| **Matcher (price discovery)** | Stage 1 shipped ([#6](https://github.com/Michael-Evenson/salvage-forge/pull/6), `8383cac`). `match_template` returns structured `Vector{ShortfallLine}` detail (kind/name/amount/families) for every demand type alongside the original `shortfall::Dict{String,Int}` (unchanged, still drives the stdout wish-list). `BulkDemand` is now a first-class demand type — matched via capacity check like `SheetDemand` (no cutting-stock combinatorics apply to "enough total quantity") — so a `bulk` item (e.g. the wire spool from `docs/BENCHMARK.md`) is visible to matching and can appear in shortfall. A "Utility wire run" template exercises it. `main()` writes the full per-template result set to `matcher/shortfall.json` (gitignored), additive to the existing stdout text. | Stage 2 (shipped, [#8](https://github.com/Michael-Evenson/salvage-forge/pull/8), `59602fe`) now reads this artifact — see the Salvage row. Still open: nothing writes back to `shortfall.json`, and it's a one-shot snapshot rather than continuously recomputed as the reservoir changes — that's stage 4's live market pricing. Also worth naming honestly rather than hiding: bulk quantity reuses `StockPiece.length` (documented inline) rather than a dedicated field, since the CSV schema is a hard interface per `CLAUDE.md` contract #1 — a deliberate reuse, not an oversight, but a real constraint on how bulk data is represented. Separately: carbon content reaching the matcher for demand-size/shape valuation ([`docs/CARBON.md`](CARBON.md)'s stage B, the live carbon-potential range) is its own open item — `CLAUDE.md` roadmap #9 — a deliberate choice between extending `inventory.csv`'s protected schema (contract #1) or a sidecar `library.json` lookup, not yet decided or built. |
+| **Ledger** | Stage 3 shipped ([#13](https://github.com/Michael-Evenson/salvage-forge/pull/13), `6ffac8e`): `ledger/ledger.py` implements deposit/credit/draw/project/project_status/earmark/certified_work as append-only, SHA-256 hash-chained records (`ledger/ledger.jsonl`, gitignored like the other runtime artifacts); `Ledger.balance()`/`earmark_status()` are pure replay functions, never stored counters. Backend-agnostic by construction (`JsonlFileBackend` behind a two-method `append`/`read_all` contract, same discipline as `call_claude()`/`call_ollama()`). Salvage-side wiring shipped too ([#15](https://github.com/Michael-Evenson/salvage-forge/pull/15)): `intake.py`'s `--donor` records a real deposit (banking credit, or crediting the reserved `commons` pool for anonymous donations — `--donor commons`); `--project` attributes it to a declared project (and counts as that project's activity) without reserving anything; `--earmark` is the separate, explicit reservation. | `matcher.jl` still calls into the ledger for nothing — a draw, a completed build, or a contractor's certified work don't record anything on the Forge/Matcher side; only Salvage's half of the seam is closed. `credit_amount` is always caller-supplied; the ledger has no valuation logic of its own (stage 4, market pricing, below). The demand-type split this project/earmark model implies (self-specified vs. market-value credit) is a flagged follow-up, not built. Commons credit accumulates but nothing disburses it — governance of that is a named, unanswered question (see "Honest hard problems," below). |
 
 ## Ledger mechanics
 
@@ -160,28 +170,43 @@ putting labor on the ledger at all.
 
 **Deposit.** Materials arrive → an inventory record enters the
 reservoir → the donor either feeds their own declared build directly,
-or banks credit.
+or banks credit. "Feeds their own declared build directly" is
+attribution, not reservation — see Earmark, below, for the distinction;
+a deposit naming a project does not by itself lock that material to it.
+Donors need not be identified individuals: an unattributed donation
+banks credit to the reserved **commons** account instead of a person
+(see Credit, next).
 
 **Credit.** Earned by donating, or purchased outright (cash buy-in —
 see "real money," below). Spent to draw materials. **Permanent — it
 never expires.** Credit is abstract and ties up no physical stock, so
 there's no operational reason to expire it; expiring it would only
-punish patient donors who haven't found a use for it yet.
+punish patient donors who haven't found a use for it yet. An anonymous
+deposit's credit goes to **commons** — a reserved account for the
+collective pool, not a person — rather than going unattributed or
+unrecorded. This is the concrete mechanism behind the nonprofit-form
+question already flagged under "real money," below: commons credit
+*accumulates* here; who decides how it later gets disbursed (e.g.
+subsidizing a build for someone in need) is a real, open question this
+document does not answer (see "Honest hard problems," below).
 
 **Draw.** A builder pulls materials from the reservoir, paying credits.
 
-**Earmark.** An optional reservation of specific inventory against a
-particular build. Requires a declared project — no project, no earmark;
-without one, material stays fungible in the shared pool. An earmark is
-held only while its project is **active**, where active means *any*
-project activity: a deposit, a draw, a status update, or producing a
-workable/approvable blueprint. Design progress counts on its own — a
-builder still iterating on plans, with no material movement yet, keeps
-their reservation. An earmark expires when its project stalls past the
-inactivity window, releasing the material back to the reservoir. In
-short: **an earmark is a lease, not a deed** — a perishable claim on
-physical stock, in contrast to credit, which is a permanent claim on
-abstract value.
+**Earmark.** An optional, *separate and explicit* reservation of
+specific inventory against a particular build — not an automatic
+consequence of a deposit naming that project. Requires a declared
+project — no project, no earmark; without one, material stays fungible
+in the shared pool, and a deposit that merely attributes to a project
+(without earmarking) leaves it fungible too. An earmark is held only
+while its project is **active**, where active means *any* project
+activity: a deposit (whether or not it earmarks), a draw, a status
+update, or producing a workable/approvable blueprint. Design progress
+counts on its own — a builder still iterating on plans, with no
+material movement yet, keeps their reservation. An earmark expires
+when its project stalls past the inactivity window, releasing the
+material back to the reservoir. In short: **an earmark is a lease, not
+a deed** — a perishable claim on physical stock, in contrast to credit,
+which is a permanent claim on abstract value.
 
 ## Stakeholder classes
 
@@ -199,6 +224,12 @@ abstract value.
   contractor is accountable to the community and builds standing within
   it — they are not paid *in* it. Like any builder, they must declare
   and keep active a project in order to earmark.
+- **Commons (the collective pool)** — not a person, and deliberately
+  cannot act like one: it can receive credit (from anonymous deposits)
+  but cannot own a project or draw materials — see Earmark and Credit,
+  above. Represents the community itself; credit banked to it accumulates
+  toward some future, currently undecided, collective use rather than
+  vanishing or defaulting to an individual.
 
 ## Honest hard problems
 
@@ -226,6 +257,16 @@ Naming these, not hiding them:
   problem this doc can solve — it's a flag: **any deployment that turns
   on cash buy-in needs a real answer to these questions first**, from
   someone qualified to give one.
+- **Commons governance.** Anonymous donations bank credit to the
+  reserved `commons` account, and that credit genuinely accumulates —
+  but nothing in this system decides how it later gets spent. Who
+  decides commons credit subsidizes a build for someone in need, or
+  funds a shared tool, or sits untouched indefinitely? Is that an
+  operator call, a community vote, something else? This document does
+  not answer that — same honesty pattern as "real money" and "credit
+  calibration," above: naming the gap rather than inventing a
+  governance model to paper over it. Disbursement mechanics are future
+  work; only accumulation exists today.
 
 ## Ledger implementation: append-only now, distributed later
 
@@ -328,27 +369,38 @@ before any of it is usable.
      there's anything for intake to read. Matcher first, then intake;
      not a bug, just the data flow, but easy to trip on if run in the
      wrong order.
-3. **Ledger v0. Shipped** ([#13](https://github.com/Michael-Evenson/salvage-forge/pull/13), `6ffac8e`).
+3. **Ledger v0. Shipped** ([#13](https://github.com/Michael-Evenson/salvage-forge/pull/13), `6ffac8e`;
+   Salvage-side wiring [#15](https://github.com/Michael-Evenson/salvage-forge/pull/15), `ab141e9`).
    `ledger/ledger.py`: deposit banks credit, a draw spends it, balances
    persist by replaying an append-only, hash-chained log — never a
    separately-mutable stored number. Also shipped: project declaration,
    earmark (with the generic, type-agnostic activity tracking the doc
    specifies — any record carrying `project_id` resets the inactivity
    clock, so a future blueprint-production event needs no ledger
-   changes to count as activity), and a contractor's certified-work
-   record, kept separate from a DIY builder's draws. Deliberately
-   ordered *after* stages 1–2 for the reason already given: by the time
-   deposits get credited, the item's demand signal is available as a
-   scarcity snapshot — though Ledger v0 itself doesn't consume it yet;
-   `credit_amount` is still caller-supplied, not computed from that
-   signal (stage 4, below, is where a real valuation function would go).
-   - **Two things this stage deliberately left open:** the ledger isn't
-     called from `intake.py` or `matcher.jl` yet — it's a standalone
-     module the rest of the system doesn't talk to, real integration
-     work rather than a formality. And the demand-type split this
-     project/earmark model implies — should a donor's self-specified
-     value or the Matcher's eventual price govern a credit amount? — is
-     a flagged follow-up, not decided or built here.
+   changes to count as activity), a contractor's certified-work record
+   kept separate from a DIY builder's draws, and a reserved `commons`
+   account anonymous deposits credit instead of going unattributed.
+   Earmarking is explicit, not automatic: attributing a deposit to a
+   project alone only counts as activity, it does not reserve the
+   material — reservation is a separate opt-in (`earmark=True` in the
+   ledger API, `--earmark` in intake). `intake.py` now actually calls
+   into all of this — `--donor`/`--project`/`--earmark` — closing the
+   Salvage half of the seam this stage originally left standalone.
+   Deliberately ordered *after* stages 1–2 for the reason already
+   given: by the time deposits get credited, the item's demand signal
+   is available as a scarcity snapshot — though Ledger v0 itself
+   doesn't consume it yet; `credit_amount` is still caller-supplied,
+   not computed from that signal (stage 4, below, is where a real
+   valuation function would go).
+   - **What this stage still leaves open:** the Matcher/Forge half of
+     the seam — `matcher.jl` calls into the ledger for nothing, so a
+     draw, a completed build, or certified work don't record anything
+     on that side. The demand-type split this project/earmark model
+     implies — should a donor's self-specified value or the Matcher's
+     eventual price govern a credit amount? — is still a flagged
+     follow-up, not decided or built. And commons credit accumulates
+     with no disbursement mechanism at all — see "Commons governance"
+     under "Honest hard problems," above.
 4. **Market pricing.** Credit value becomes a live function of matcher
    scarcity, rather than the snapshot baked in at intake time in stage
    2 — a build that gets fulfilled changes what's scarce, and unfulfilled
