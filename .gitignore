@@ -4,6 +4,7 @@ inventory.csv
 !matcher/sample_inventory.csv
 cutsheets.txt
 shortfall.json
+ledger.jsonl
 
 # secrets — never commit keys
 .env
