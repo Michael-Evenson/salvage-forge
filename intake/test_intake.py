@@ -38,6 +38,30 @@ def test_truncated_items_array_salvages_complete_objects():
     ]
 
 
+def test_complete_response_is_not_flagged_truncated():
+    # Regression test for the false positive seen during qwen3-vl benchmark
+    # testing (docs/BENCHMARK.md): a fully complete, valid items array got
+    # flagged "truncated" anyway. Root cause: the salvage path is reached
+    # whenever the fast-path json.loads fails for ANY reason -- here, a
+    # leading preamble with a stray brace breaks the naive first-'{'/
+    # last-'}' slice -- but the old code unconditionally stamped
+    # truncated=True whenever it salvaged >=1 item, regardless of whether
+    # the items array actually closed cleanly.
+    text = (
+        'Sure, here is the JSON {as requested}: '
+        '{"items": ['
+        '{"name": "box", "qty": 3}, '
+        '{"name": "pallet", "qty": 1}'
+        ']}'
+    )
+    result = repair_and_parse(text)
+    assert "truncated" not in result
+    assert result["items"] == [
+        {"name": "box", "qty": 3},
+        {"name": "pallet", "qty": 1},
+    ]
+
+
 def test_pure_garbage_raises_value_error():
     # No '{' anywhere in the text at all.
     with pytest.raises(ValueError):
