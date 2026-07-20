@@ -14,6 +14,14 @@ Usage:
     python3 intake.py photo.jpg --local        # run against local Ollama model
     python3 intake.py photo.jpg --dry-run      # resize/parse pipeline only, no API
     python3 intake.py photo.jpg --verbose      # also print the raw model response
+    python3 intake.py photo.jpg --donor alice  # also record a ledger deposit,
+                                                # banking credit to "alice"
+    python3 intake.py photo.jpg --donor alice --project <id>
+                                                # deposit feeds that declared
+                                                # project instead of banking
+                                                # credit (docs/ECONOMY.md);
+                                                # requires --donor, and the
+                                                # project must already exist
     python3 intake.py --library                # show what's been learned
 
 Files it maintains (created on first run, in the working directory):
@@ -28,6 +36,13 @@ Files it reads, if present (never required, never invokes Julia itself):
                              passport, a separate axis from value_tier
                              (see docs/BENCHMARK.md). Override the search
                              path with SHORTFALL_PATH.
+
+Ledger (docs/ECONOMY.md build stage 3), optional -- only touched at all
+when --donor is given (see open_ledger()/record_deposit()): a sibling
+Python module (ledger/ledger.py), not a hard dependency -- a bare
+`python intake.py photo.jpg` with no --donor never imports it, and any
+ledger failure (missing module, locked/corrupt log, a --project that
+doesn't exist) is caught and warned about, never fatal to the intake run.
 
 Dependencies:  pip install requests pillow pillow-heif
 """
@@ -341,6 +356,58 @@ def match_demand(category, family, entries):
 def fmt_amount(x):
     return str(int(x)) if float(x).is_integer() else f"{x:.1f}"
 
+# ---------------------------------------------------------------- ledger (docs/ECONOMY.md stage 3 wiring)
+# Closes the Salvage->Ledger seam: a successful intake records a deposit,
+# so a donation actually banks credit (or feeds a declared project) rather
+# than only happening in ledger/test_ledger.py. Optional by construction --
+# --donor is the opt-in (its absence means intake never even imports the
+# ledger, not just "runs with it absent"), same decoupled-seam spirit as
+# load_shortfall() above.
+CREDIT_PER_ITEM_V0 = 1  # flat placeholder credit per inventory row; stage 4
+                         # (market pricing, docs/ECONOMY.md) replaces this
+                         # with a real valuation. Deliberately NOT derived
+                         # from est_value_usd, the demand signal, or the
+                         # carbon estimate -- that coupling belongs to
+                         # stage 4, not this wiring.
+
+def open_ledger():
+    """Lazy, guarded import + construction. ledger/ is a sibling directory,
+    not a package intake.py depends on at parse time, so intake.py keeps
+    working standalone even if ledger/ is missing or broken -- the ledger
+    must stay optional. Only called when --donor is given. Never raises;
+    returns None on any failure (missing module, unreadable/corrupt log)."""
+    try:
+        ledger_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ledger")
+        if ledger_dir not in sys.path:
+            sys.path.insert(0, ledger_dir)
+        from ledger import Ledger
+        return Ledger()
+    except Exception as e:
+        print(f"LEDGER  WARNING: could not open ledger -- {e}")
+        return None
+
+def record_deposit(ledger, donor, project_id, rid, category, family):
+    """The one seam between intake and the ledger (mirrors the
+    call_claude()/call_ollama() backend-contract style: one clear boundary,
+    not calls scattered through main()). Never raises -- any failure (a
+    --project that doesn't exist, a locked/corrupt log file) is caught here
+    and reported as a warning. The passport and inventory.csv row this
+    deposit describes are already written regardless of whether this call
+    succeeds: the item exists physically whether or not the bookkeeping
+    does, so a ledger failure must never lose intake work."""
+    if ledger is None:
+        return
+    try:
+        if project_id:
+            ledger.deposit(donor, rid, project_id=project_id, category=category, family=family)
+            print(f"LEDGER  deposit recorded -- {rid} feeds project {project_id}")
+        else:
+            ledger.deposit(donor, rid, credit_amount=CREDIT_PER_ITEM_V0,
+                            category=category, family=family)
+            print(f"LEDGER  deposit recorded -- {donor} banked {CREDIT_PER_ITEM_V0} credit for {rid}")
+    except Exception as e:
+        print(f"LEDGER  WARNING: deposit not recorded for {rid} -- {e}")
+
 def save_library(lib):
     with open(LIB_PATH, "w") as f: json.dump(lib, f, indent=1)
 
@@ -351,10 +418,13 @@ def append_rows(rows):
         for r in rows: f.write(r + "\n")
 
 def mk_row(p):
+    """Returns (rid, csv_line) -- the id is exposed (not just embedded in the
+    formatted line) so callers can reference the same row elsewhere, e.g. as
+    a ledger deposit's inventory_ref (see record_deposit)."""
     rid = "K" + str(int(time.time() * 1000) + random.randint(0, 999))[-6:]
     desc = str(p.get("description") or p.get("name") or "item").replace(",", ";")
-    return (f"{rid},{p.get('category','part')},{p.get('family','misc')},{desc},"
-            f"{p.get('length_in',0)},{p.get('width_in',0)},{p.get('qty',1)},{p.get('condition','C')}")
+    return rid, (f"{rid},{p.get('category','part')},{p.get('family','misc')},{desc},"
+                 f"{p.get('length_in',0)},{p.get('width_in',0)},{p.get('qty',1)},{p.get('condition','C')}")
 
 # ---------------------------------------------------------------- passport print
 def show_passport(p, tier, seen, demand=None):
@@ -389,8 +459,20 @@ def show_passport(p, tier, seen, demand=None):
 
 # ---------------------------------------------------------------- main
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    argv = sys.argv[1:]
+    flags = {a for a in argv if a.startswith("--")}
+    # --donor/--project take a value; exclude both the flag and its value
+    # token from the positional-args list below (minimal hand-parsing,
+    # matching this file's existing bare-boolean-flag convention rather
+    # than pulling in argparse for two value flags).
+    VALUE_FLAGS = ("--donor", "--project")
+    consumed = {i + 1 for i, a in enumerate(argv) if a in VALUE_FLAGS and i + 1 < len(argv)}
+    args = [a for i, a in enumerate(argv) if not a.startswith("--") and i not in consumed]
+    donor = argv[argv.index("--donor") + 1] if "--donor" in argv else None
+    project_id = argv[argv.index("--project") + 1] if "--project" in argv else None
+    if project_id and not donor:
+        sys.exit("--project requires --donor -- who is feeding this project?")
+
     library = load_json(LIB_PATH, SEED_LIBRARY)
 
     if "--library" in flags:
@@ -418,6 +500,11 @@ def main():
               f"(generated {signal.get('generated_at', '?')})")
     else:
         print("DEMAND  no shortfall.json found -- value_tier stays resale-heuristic only")
+
+    ledger = open_ledger() if donor else None
+    if donor:
+        dest = f"feeding project {project_id}" if project_id else "banking credit"
+        print(f"LEDGER  recording deposits as donor '{donor}' ({dest})")
 
     if "--dry-run" in flags:
         # Exercise the whole pipeline with a canned response — no API needed.
@@ -477,7 +564,9 @@ def main():
             p = {**entry["passport"], "name": entry["name"],
                  "qty": it.get("qty", 1),
                  "condition": it.get("condition", entry["passport"].get("condition", "C"))}
-            rows.append(mk_row(p))
+            rid, row = mk_row(p)
+            rows.append(row)
+            record_deposit(ledger, donor, project_id, rid, p.get("category"), p.get("family"))
             demand = match_demand(p.get("category"), p.get("family"), demand_entries)
             show_passport(p, 1, entry["seen"], demand)
         elif it.get("name"):
@@ -486,7 +575,9 @@ def main():
             eid = f"learned-{int(time.time()*1000)}-{random.randint(0,999)}"
             library.append({"id": eid, "name": it["name"],
                             "keywords": it.get("keywords", []), "seen": 1, "passport": it})
-            rows.append(mk_row(it))
+            rid, row = mk_row(it)
+            rows.append(row)
+            record_deposit(ledger, donor, project_id, rid, it.get("category"), it.get("family"))
             demand = match_demand(it.get("category"), it.get("family"), demand_entries)
             show_passport(it, 2, 1, demand)
 
