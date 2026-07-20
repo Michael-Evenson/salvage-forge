@@ -349,10 +349,86 @@ function write_shortfall_json(path::String, source::String, results)
     end
 end
 
+"""
+Serializes completed builds for a given drawer identity as a structured
+JSON artifact (docs/ECONOMY.md build stage 3, Forge/Matcher-side wiring --
+the mirror of Salvage's intake<->ledger wiring). ledger/record_draws.py
+reads this file and turns each entry into a ledger.draw() call; matcher.jl
+itself never imports or calls into the Python ledger -- the project's only
+established Julia<->Python channel is files (inventory.csv, shortfall.json),
+never a live call, and this keeps that pattern rather than introducing a
+new kind of coupling. Only called when a drawer identity was actually given
+AND at least one build completed -- no identity, no artifact, same
+"writes are deliberate" principle as intake.py's --donor.
+"""
+function write_draws_json(path::String, drawer, builds)
+    payload = Dict(
+        "generated_at" => string(now()),
+        "drawer" => Dict("id" => drawer.id, "role" => drawer.role,
+                          "job_id" => drawer.job_id, "client" => drawer.client),
+        "builds" => builds,
+    )
+    open(path, "w") do io
+        JSON.print(io, payload, 2)
+    end
+end
+
 # ---------------------------------------------------------------------------
 # 5. MAIN
 # ---------------------------------------------------------------------------
-function main(path)
+"""
+Parses --builder <id>, or --contractor <id> --job <job_id> --client
+<client>, from the CLI args -- the matcher-side equivalent of intake.py's
+--donor: identity is optional and opt-in, so a bare `julia matcher.jl
+inventory.csv` behaves exactly as before this existed (no flag, no
+draws.json, no ledger involvement). Returns a NamedTuple (id, role,
+job_id, client) or `nothing`. Raises (via `error`, caught at the bottom
+of this file) on malformed combinations -- fail fast on a bad CLI combo,
+same precedent as intake.py's --project-without---donor check.
+"""
+function parse_drawer(args)
+    idx(flag) = findfirst(==(flag), args)
+    builder_i = idx("--builder")
+    contractor_i = idx("--contractor")
+    if builder_i !== nothing && contractor_i !== nothing
+        error("--builder and --contractor are mutually exclusive")
+    end
+    if builder_i !== nothing
+        builder_i == length(args) && error("--builder requires an id")
+        return (id=args[builder_i+1], role="builder", job_id=nothing, client=nothing)
+    elseif contractor_i !== nothing
+        contractor_i == length(args) && error("--contractor requires an id")
+        job_i, client_i = idx("--job"), idx("--client")
+        (job_i === nothing || client_i === nothing) &&
+            error("--contractor requires both --job and --client")
+        job_i == length(args) && error("--job requires a value")
+        client_i == length(args) && error("--client requires a value")
+        return (id=args[contractor_i+1], role="contractor",
+                job_id=args[job_i+1], client=args[client_i+1])
+    else
+        return nothing
+    end
+end
+
+"Extracts the positional inventory-path arg, skipping recognized flags and their values."
+function parse_inventory_path(args)
+    flags_with_values = ("--builder", "--contractor", "--job", "--client")
+    skip_next = false
+    for a in args
+        if skip_next
+            skip_next = false
+            continue
+        end
+        if a in flags_with_values
+            skip_next = true
+            continue
+        end
+        return a
+    end
+    return "inventory.csv"
+end
+
+function main(path; drawer=nothing)
     inv = load_inventory(path)
     println("Loaded $(length(inv)) pieces from $path\n")
     println("WHAT CAN THIS PILE BECOME?  (independent feasibility)\n")
@@ -398,6 +474,7 @@ function main(path)
     # Sequential plan: build everything buildable, consuming inventory in order
     println("\nSEQUENTIAL BUILD PLAN (consuming inventory):\n")
     pool = inv
+    builds = []   # completed builds this run, for draws.json (only used if drawer !== nothing)
     open("cutsheets.txt", "w") do io
         for (tpl0, ok0, _, _, _) in results
             ok0 || continue
@@ -411,7 +488,16 @@ function main(path)
             if ok
                 println("  BUILD: ", tpl.name)
                 print_cutsheet(io, tpl, plan, pool)
+                # Diffed before/after consume(), not just plan's keys, so
+                # part/sheet/bulk pieces consume() also removes (which never
+                # appear in `plan`, only linear cuts do) are captured too.
+                before_ids = Set(p.id for p in pool)
                 pool = consume(pool, tpl, plan)
+                after_ids = Set(p.id for p in pool)
+                if drawer !== nothing
+                    push!(builds, Dict("template" => tpl.name,
+                                        "consumed_ids" => collect(setdiff(before_ids, after_ids))))
+                end
             else
                 println("  SKIP (inventory exhausted): ", tpl0.name)
             end
@@ -422,6 +508,23 @@ function main(path)
 
     write_shortfall_json("shortfall.json", path, results)
     println("Shortfall (price signal) written to shortfall.json")
+
+    if drawer !== nothing
+        if isempty(builds)
+            println("No builds completed -- nothing to record for $(drawer.id)")
+        else
+            write_draws_json("draws.json", drawer, builds)
+            println("$(length(builds)) build(s) recorded to draws.json for $(drawer.id) " *
+                    "-- run `python3 ledger/record_draws.py` to post them to the ledger")
+        end
+    end
 end
 
-main(length(ARGS) >= 1 ? ARGS[1] : "inventory.csv")
+_path = parse_inventory_path(ARGS)
+_drawer = try
+    parse_drawer(ARGS)
+catch e
+    println(stderr, "ERROR: ", e isa ErrorException ? e.msg : sprint(showerror, e))
+    exit(1)
+end
+main(_path; drawer=_drawer)
