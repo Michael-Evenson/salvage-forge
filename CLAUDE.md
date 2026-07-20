@@ -46,8 +46,8 @@ cd matcher && julia matcher.jl sample_inventory.csv
 ```
 
 Runtime files `library.json`, `inventory.csv`, `cutsheets.txt`,
-`shortfall.json` are gitignored on purpose (user data / generated
-output).
+`shortfall.json`, `ledger.jsonl` are gitignored on purpose (user data /
+generated output).
 
 ## Style
 
@@ -76,3 +76,14 @@ output).
    by resale heuristics. The matcher's shortfall slack already computes
    this signal; feed it back into intake's value assignment. This makes
    Salvage and Forge co-dependent rather than sequential.
+9. Carbon reaches the matcher. docs/CARBON.md's stage B (per-build
+   duration + the live carbon-potential range) needs Salvage's per-item
+   carbon content (intake's `est_carbon_kg_co2e`, stage A) visible to
+   `matcher.jl` for demand-size/shape valuation — right now it only
+   lives in `library.json`, invisible to the matcher entirely. This is a
+   decision to make deliberately, not a default to fall into: extend the
+   protected `inventory.csv` schema (architecture contract #1 above,
+   needs its own review) vs. a sidecar lookup joining `matcher.jl`'s
+   `StockPiece` back to `library.json` by family. First concrete step
+   toward CARBON.md's matcher-side carbon-potential range. Its own
+   future PR — do not fold this into unrelated ledger/intake work.

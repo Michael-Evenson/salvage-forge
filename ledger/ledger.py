@@ -28,6 +28,22 @@ call_ollama()'s (prompt, image) -> text contract (CLAUDE.md contract
 #2): a backend need only implement append(record) and read_all(). v0
 ships JsonlFileBackend; a future distributed backend implements the
 same two methods and nothing in Ledger changes.
+
+COMMONS_ID ("commons") is a reserved actor id for anonymous-donation
+credit -- a first-class collective-pool recipient, not a person. It can
+receive credit like anyone else; declare_project()/draw() both reject
+it, since owning a project or drawing materials implies individual
+accountability the pool doesn't have. Disbursing accumulated commons
+credit is deliberately left as a future governance decision, not built
+here.
+
+deposit()'s project_id attributes a deposit and counts as project
+activity (resets the earmark clock for that project) WITHOUT reserving
+the deposited inventory_ref -- that's a separate, explicit earmark=True.
+Attribution and reservation used to be conflated (feeding a project
+always earmarked); they're deliberately decoupled now, since locking
+stock other builds could use is a real claim that should never be a
+side effect of merely naming which project a deposit is for.
 """
 
 import hashlib
@@ -41,6 +57,19 @@ DEFAULT_INACTIVITY_WINDOW = timedelta(days=90)   # tunable; see Ledger(inactivit
 
 DRAW_ROLES = {"builder", "contractor"}
 CREDIT_SOURCES = {"donation", "manual_grant"}
+
+COMMONS_ID = "commons"   # reserved: the collective pool anonymous deposits
+                          # credit to (docs/ECONOMY.md's nonprofit mechanism
+                          # -- commons credit accumulates, disbursement is an
+                          # operator decision left for later). It can RECEIVE
+                          # credit like any recipient, but is not a person:
+                          # it cannot own a project or draw materials -- see
+                          # declare_project()/draw() below. Reserving it here,
+                          # not just as an intake-side convention, is what
+                          # makes "a human can't register commons as a
+                          # personal account" actually enforced rather than
+                          # a documentation-only convention any caller could
+                          # ignore.
 
 
 def _now():
@@ -127,22 +156,43 @@ class Ledger:
 
     # ---------------------------------------------------------------- deposit / credit
     def deposit(self, donor, inventory_ref, credit_amount=0, category=None,
-                family=None, project_id=None):
+                family=None, project_id=None, earmark=False):
         """Materials arrive -> an inventory record enters the reservoir.
-        Either feeds the donor's own declared project (project_id given
-        -- an earmark is created, no credit minted) or banks credit
-        (project_id omitted -- credit_amount is minted to the donor).
-        credit_amount is caller-supplied; the ledger does not compute a
-        valuation (stage 4, out of scope for v0)."""
+        Either feeds the donor's own declared project (project_id given --
+        no credit minted) or banks credit (project_id omitted --
+        credit_amount is minted to the donor). credit_amount is
+        caller-supplied; the ledger does not compute a valuation (stage 4,
+        out of scope for v0).
+
+        Feeding a project attributes the deposit to it and counts as
+        project activity (project_id is set on the deposit record itself,
+        so it resets the inactivity clock for that project's existing
+        earmarks) -- it does NOT by itself reserve this inventory_ref.
+        Reservation is a separate, deliberate act: pass earmark=True to
+        also earmark this inventory_ref against the project. Locking
+        stock other builds could use, and starting lease obligations,
+        should be a deliberate claim, not a side effect of attribution.
+
+        project_id is validated to exist regardless of earmark -- that
+        check used to happen implicitly, as a side effect of always
+        calling earmark() (which validates it internally). Decoupling
+        earmark from deposit removed that free ride, so it's checked
+        explicitly here now: a deposit attributed to a project is exactly
+        as much a claim about that project's existence as reserving
+        material against it is, and both should fail the same way for a
+        bogus project_id, not silently diverge."""
         if project_id is not None and credit_amount:
             raise LedgerError("deposit feeds a project OR banks credit, not both")
+        if project_id is not None and self._find_project(project_id) is None:
+            raise LedgerError(f"no such project: {project_id} -- no project, no deposit")
         deposit_record = self._append("deposit", {
             "donor": donor, "inventory_ref": inventory_ref,
             "category": category, "family": family,
             "credit_amount": credit_amount,
         }, project_id=project_id)
         if project_id is not None:
-            self.earmark(project_id, inventory_ref)
+            if earmark:
+                self.earmark(project_id, inventory_ref)
         elif credit_amount:
             self.grant_credit(donor, credit_amount, source="donation",
                                reference=deposit_record["id"])
@@ -166,6 +216,10 @@ class Ledger:
         """A builder or contractor pulls materials, paying credits.
         Contractors must attribute the draw to a job/client (docs/ECONOMY.md
         stakeholder classes); builders don't carry that attribution."""
+        if drawer == COMMONS_ID:
+            raise LedgerError(f"'{COMMONS_ID}' is reserved for the collective pool and "
+                               "cannot draw materials -- disbursing commons credit is a "
+                               "future governance decision, not an individual draw")
         if role not in DRAW_ROLES:
             raise LedgerError(f"unknown draw role: {role} (must be one of {DRAW_ROLES})")
         if role == "contractor" and not (job_id and client):
@@ -193,6 +247,9 @@ class Ledger:
 
     # ---------------------------------------------------------------- project / earmark
     def declare_project(self, owner, name):
+        if owner == COMMONS_ID:
+            raise LedgerError(f"'{COMMONS_ID}' is reserved for the collective pool and "
+                               "cannot own a project -- it's not a person")
         # A project's own id doubles as its project_id from the start, so
         # its declaration counts as its own first activity event -- both
         # have to be decided before the record is built (and hashed), not

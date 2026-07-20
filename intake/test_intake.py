@@ -126,6 +126,9 @@ def test_intake_with_donor_and_no_project_banks_credit(tmp_path, monkeypatch):
 
 
 def test_intake_with_project_feeds_project_and_resets_activity(tmp_path, monkeypatch):
+    # --project alone attributes the deposit and counts as activity -- it
+    # does NOT by itself reserve the material (earmark is a separate,
+    # deliberate --earmark opt-in; see the next test).
     monkeypatch.chdir(tmp_path)
     setup_ledger = _open_test_ledger()
     project = setup_ledger.declare_project("bob", "cold frame")
@@ -142,11 +145,76 @@ def test_intake_with_project_feeds_project_and_resets_activity(tmp_path, monkeyp
     assert ledger.balance("bob") == 0   # fed the project, no credit minted
     earmarks = [r for r in ledger.all_records()
                 if r["type"] == "earmark" and r["project_id"] == project["id"]]
-    assert len(earmarks) == 3
-    # Every earmark (and the deposits behind them) carries project_id, so the
-    # project's activity clock moved forward from its bare declaration --
-    # the generic, type-agnostic tracking docs/ECONOMY.md specifies.
+    assert len(earmarks) == 0   # attribution only -- material stays fungible
+    # The deposits themselves carry project_id, so the project's activity
+    # clock still moved forward from its bare declaration -- the generic,
+    # type-agnostic tracking docs/ECONOMY.md specifies.
     assert setup_ledger.project_last_activity(project["id"]) > first_activity
+
+
+def test_intake_with_project_and_earmark_reserves_the_material(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    setup_ledger = _open_test_ledger()
+    project = setup_ledger.declare_project("bob", "cold frame")
+
+    photo = tmp_path / "photo.jpg"
+    _write_test_photo(photo)
+    monkeypatch.setattr(sys, "argv",
+                         ["intake.py", str(photo), "--dry-run", "--donor", "bob",
+                          "--project", project["id"], "--earmark"])
+    intake.main()
+
+    ledger = _open_test_ledger()
+    assert ledger.balance("bob") == 0
+    earmarks = [r for r in ledger.all_records()
+                if r["type"] == "earmark" and r["project_id"] == project["id"]]
+    assert len(earmarks) == 3   # one per dry-run row, now genuinely reserved
+    for r in earmarks:
+        assert ledger.is_earmarked(r["data"]["inventory_ref"]) is True
+
+
+def test_earmark_without_project_exits(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    photo = tmp_path / "photo.jpg"
+    _write_test_photo(photo)
+    monkeypatch.setattr(sys, "argv",
+                         ["intake.py", str(photo), "--dry-run", "--donor", "bob", "--earmark"])
+    with pytest.raises(SystemExit):
+        intake.main()
+
+
+def test_anonymous_donor_commons_credits_the_commons_pool(tmp_path, monkeypatch):
+    # --donor commons is the explicit opt-in for anonymous crediting -- a
+    # bare run with no --donor at all still records nothing (see
+    # test_intake_without_donor_never_touches_ledger); this is a
+    # deliberately different, still-explicit path, not an automatic default.
+    monkeypatch.chdir(tmp_path)
+    photo = tmp_path / "photo.jpg"
+    _write_test_photo(photo)
+    monkeypatch.setattr(sys, "argv",
+                         ["intake.py", str(photo), "--dry-run", "--donor", intake.COMMONS_ID])
+
+    intake.main()
+
+    ledger = _open_test_ledger()
+    assert ledger.balance(intake.COMMONS_ID) == 3 * intake.CREDIT_PER_ITEM_V0
+    deposits = [r for r in ledger.all_records() if r["type"] == "deposit"]
+    assert all(d["data"]["donor"] == intake.COMMONS_ID for d in deposits)
+
+
+def test_commons_cannot_be_used_as_a_project_owner(tmp_path, monkeypatch):
+    # The reservation is enforced ledger-side (declare_project()/draw() both
+    # reject COMMONS_ID -- see ledger/test_ledger.py's
+    # test_commons_cannot_own_a_project/test_commons_cannot_draw for the
+    # direct tests of "a human attempting to claim the commons id is
+    # rejected"). intake itself never calls declare_project() or draw(), so
+    # this test just confirms intake's own ledger surface -- deposit() --
+    # doesn't route around that enforcement.
+    monkeypatch.chdir(tmp_path)
+    ledger = _open_test_ledger()
+    from ledger import LedgerError
+    with pytest.raises(LedgerError):
+        ledger.declare_project(intake.COMMONS_ID, "not a real project")
 
 
 def test_intake_without_donor_never_touches_ledger(tmp_path, monkeypatch, capsys):

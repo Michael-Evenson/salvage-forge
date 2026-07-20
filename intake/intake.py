@@ -16,12 +16,29 @@ Usage:
     python3 intake.py photo.jpg --verbose      # also print the raw model response
     python3 intake.py photo.jpg --donor alice  # also record a ledger deposit,
                                                 # banking credit to "alice"
+    python3 intake.py photo.jpg --donor commons
+                                                # anonymous donation -- credits
+                                                # the reserved commons pool,
+                                                # not a person (see ledger.py's
+                                                # COMMONS_ID). Deliberate opt-in;
+                                                # a bare run with no --donor
+                                                # still records nothing
     python3 intake.py photo.jpg --donor alice --project <id>
-                                                # deposit feeds that declared
-                                                # project instead of banking
-                                                # credit (docs/ECONOMY.md);
-                                                # requires --donor, and the
-                                                # project must already exist
+                                                # deposit is attributed to that
+                                                # declared project and counts
+                                                # as its activity (resets the
+                                                # earmark clock) instead of
+                                                # banking credit -- requires
+                                                # --donor, and the project must
+                                                # already exist. Does NOT
+                                                # reserve the material by
+                                                # itself; add --earmark for that
+    python3 intake.py photo.jpg --donor alice --project <id> --earmark
+                                                # also reserves this item
+                                                # against the project -- a
+                                                # deliberate claim, since it
+                                                # locks stock other builds
+                                                # could use
     python3 intake.py --library                # show what's been learned
 
 Files it maintains (created on first run, in the working directory):
@@ -370,6 +387,13 @@ CREDIT_PER_ITEM_V0 = 1  # flat placeholder credit per inventory row; stage 4
                          # carbon estimate -- that coupling belongs to
                          # stage 4, not this wiring.
 
+# ledger.py's COMMONS_ID source of truth is ledger/ledger.py itself (the
+# reservation is enforced there -- declare_project()/draw() both reject
+# it). Duplicated here as a literal, not imported, so this file's status
+# messages don't force the lazy ledger import just to print a nicer line;
+# if it's ever renamed, ledger.py's docstring is the place that matters.
+COMMONS_ID = "commons"
+
 def open_ledger():
     """Lazy, guarded import + construction. ledger/ is a sibling directory,
     not a package intake.py depends on at parse time, so intake.py keeps
@@ -386,7 +410,7 @@ def open_ledger():
         print(f"LEDGER  WARNING: could not open ledger -- {e}")
         return None
 
-def record_deposit(ledger, donor, project_id, rid, category, family):
+def record_deposit(ledger, donor, project_id, earmark, rid, category, family):
     """The one seam between intake and the ledger (mirrors the
     call_claude()/call_ollama() backend-contract style: one clear boundary,
     not calls scattered through main()). Never raises -- any failure (a
@@ -394,13 +418,24 @@ def record_deposit(ledger, donor, project_id, rid, category, family):
     and reported as a warning. The passport and inventory.csv row this
     deposit describes are already written regardless of whether this call
     succeeds: the item exists physically whether or not the bookkeeping
-    does, so a ledger failure must never lose intake work."""
+    does, so a ledger failure must never lose intake work.
+
+    earmark: whether this deposit should ALSO reserve rid against
+    project_id (see ledger.Ledger.deposit) -- ignored when project_id is
+    None. Attribution and reservation are deliberately separate claims;
+    --project alone only attributes and resets the project's activity
+    clock, it does not lock the material."""
     if ledger is None:
         return
     try:
         if project_id:
-            ledger.deposit(donor, rid, project_id=project_id, category=category, family=family)
-            print(f"LEDGER  deposit recorded -- {rid} feeds project {project_id}")
+            ledger.deposit(donor, rid, project_id=project_id, earmark=earmark,
+                            category=category, family=family)
+            if earmark:
+                print(f"LEDGER  deposit recorded -- {rid} feeds and is earmarked to project {project_id}")
+            else:
+                print(f"LEDGER  deposit recorded -- {rid} feeds project {project_id} "
+                      f"(not earmarked, stays fungible)")
         else:
             ledger.deposit(donor, rid, credit_amount=CREDIT_PER_ITEM_V0,
                             category=category, family=family)
@@ -470,8 +505,11 @@ def main():
     args = [a for i, a in enumerate(argv) if not a.startswith("--") and i not in consumed]
     donor = argv[argv.index("--donor") + 1] if "--donor" in argv else None
     project_id = argv[argv.index("--project") + 1] if "--project" in argv else None
+    earmark = "--earmark" in flags
     if project_id and not donor:
         sys.exit("--project requires --donor -- who is feeding this project?")
+    if earmark and not project_id:
+        sys.exit("--earmark requires --project -- what would be reserved, and against what?")
 
     library = load_json(LIB_PATH, SEED_LIBRARY)
 
@@ -503,8 +541,12 @@ def main():
 
     ledger = open_ledger() if donor else None
     if donor:
-        dest = f"feeding project {project_id}" if project_id else "banking credit"
-        print(f"LEDGER  recording deposits as donor '{donor}' ({dest})")
+        if project_id:
+            dest = f"earmarked to project {project_id}" if earmark else f"feeding project {project_id} (not earmarked)"
+        else:
+            dest = "banking credit"
+        who = "anonymous donation -- credited to the commons pool" if donor == COMMONS_ID else f"donor '{donor}'"
+        print(f"LEDGER  recording deposits as {who} ({dest})")
 
     if "--dry-run" in flags:
         # Exercise the whole pipeline with a canned response — no API needed.
@@ -566,7 +608,7 @@ def main():
                  "condition": it.get("condition", entry["passport"].get("condition", "C"))}
             rid, row = mk_row(p)
             rows.append(row)
-            record_deposit(ledger, donor, project_id, rid, p.get("category"), p.get("family"))
+            record_deposit(ledger, donor, project_id, earmark, rid, p.get("category"), p.get("family"))
             demand = match_demand(p.get("category"), p.get("family"), demand_entries)
             show_passport(p, 1, entry["seen"], demand)
         elif it.get("name"):
@@ -577,7 +619,7 @@ def main():
                             "keywords": it.get("keywords", []), "seen": 1, "passport": it})
             rid, row = mk_row(it)
             rows.append(row)
-            record_deposit(ledger, donor, project_id, rid, it.get("category"), it.get("family"))
+            record_deposit(ledger, donor, project_id, earmark, rid, it.get("category"), it.get("family"))
             demand = match_demand(it.get("category"), it.get("family"), demand_entries)
             show_passport(it, 2, 1, demand)
 
