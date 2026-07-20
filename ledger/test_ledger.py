@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ledger import Ledger, LedgerError
+from ledger import COMMONS_ID, Ledger, LedgerError
 
 
 class FakeClock:
@@ -146,8 +146,57 @@ def test_hash_chain_verifies_and_detects_tampering(ledger, tmp_path):
         tampered_ledger.verify_chain()
 
 
-def test_deposit_feeding_own_project_earmarks_instead_of_crediting(ledger):
+def test_deposit_feeding_project_does_not_earmark_by_default(ledger):
+    # Attribution and reservation are decoupled: feeding a project banks no
+    # credit and counts as activity, but does NOT by itself lock the
+    # inventory to that project -- earmark=True is a separate, deliberate
+    # claim (see the Ledger.deposit docstring).
     project = ledger.declare_project("erin", "pallet shed")
     ledger.deposit("erin", "K099", project_id=project["id"])
     assert ledger.balance("erin") == 0
+    assert ledger.is_earmarked("K099") is False
+
+
+def test_deposit_feeding_project_with_earmark_true_reserves_it(ledger):
+    project = ledger.declare_project("erin", "pallet shed")
+    ledger.deposit("erin", "K099", project_id=project["id"], earmark=True)
+    assert ledger.balance("erin") == 0
     assert ledger.is_earmarked("K099") is True
+
+
+def test_deposit_feeding_project_without_earmark_still_counts_as_activity(ledger, clock):
+    # The deposit itself carries project_id even without earmark=True, so
+    # it still resets the clock for the project's OTHER, already-earmarked
+    # inventory.
+    project = ledger.declare_project("erin", "pallet shed")
+    mark = ledger.earmark(project["id"], "K001")
+    clock.advance(timedelta(hours=23))
+    ledger.deposit("erin", "K099", project_id=project["id"])   # no earmark=True
+    clock.advance(timedelta(hours=2))   # 25h past the original earmark, but only 2h past this deposit
+    assert ledger.earmark_status(mark["id"]) == "active"
+
+
+def test_deposit_with_nonexistent_project_raises_even_without_earmark(ledger):
+    # Regression guard: project existence used to be validated as a free
+    # side effect of deposit() always calling earmark() internally. Now
+    # that earmark is opt-in, a bogus project_id must still be caught by
+    # deposit() itself -- not silently accepted just because earmark=False
+    # skips the check that earmark() would have done.
+    with pytest.raises(LedgerError):
+        ledger.deposit("erin", "K099", project_id="no-such-project")
+
+
+def test_commons_can_receive_credit(ledger):
+    ledger.deposit(COMMONS_ID, "K200", credit_amount=1)
+    assert ledger.balance(COMMONS_ID) == 1
+
+
+def test_commons_cannot_own_a_project(ledger):
+    with pytest.raises(LedgerError):
+        ledger.declare_project(COMMONS_ID, "not a real project")
+
+
+def test_commons_cannot_draw(ledger):
+    ledger.grant_credit(COMMONS_ID, 10)
+    with pytest.raises(LedgerError):
+        ledger.draw(COMMONS_ID, "builder", "K001", credit_amount=5)
