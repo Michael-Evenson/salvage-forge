@@ -212,10 +212,19 @@ class Ledger:
 
     # ---------------------------------------------------------------- draw
     def draw(self, drawer, role, inventory_ref, credit_amount, project_id=None,
-              job_id=None, client=None):
+              job_id=None, client=None, consumed_ids=None):
         """A builder or contractor pulls materials, paying credits.
         Contractors must attribute the draw to a job/client (docs/ECONOMY.md
-        stakeholder classes); builders don't carry that attribution."""
+        stakeholder classes); builders don't carry that attribution.
+
+        inventory_ref is a single human-readable "what was drawn" (e.g. a
+        stock piece id for a single-piece draw, or a build/template name
+        for a whole-build draw -- see matcher/record_draws.py, the
+        Forge/Matcher-side wiring). consumed_ids is an optional additive
+        field for the latter case: the specific stock piece ids a
+        multi-piece draw consumed, kept for traceability without forcing
+        one ledger record per piece. Defaults to empty so existing
+        single-piece callers are unaffected."""
         if drawer == COMMONS_ID:
             raise LedgerError(f"'{COMMONS_ID}' is reserved for the collective pool and "
                                "cannot draw materials -- disbursing commons credit is a "
@@ -232,6 +241,7 @@ class Ledger:
         return self._append("draw", {
             "drawer": drawer, "role": role, "inventory_ref": inventory_ref,
             "credit_amount": credit_amount, "job_id": job_id, "client": client,
+            "consumed_ids": list(consumed_ids or []),
         }, project_id=project_id)
 
     def record_certified_work(self, contractor, job_id, client, description,
