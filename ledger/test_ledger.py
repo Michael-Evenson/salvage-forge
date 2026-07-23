@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ledger import COMMONS_ID, Ledger, LedgerError
+from ledger import COMMONS_ID, CREDIT_PER_LAPSE_V0, Ledger, LedgerError
 
 
 class FakeClock:
@@ -57,7 +57,7 @@ def test_draw_exceeding_balance_raises(ledger):
 
 def test_earmark_holds_while_active_and_releases_when_stalled(ledger, clock):
     project = ledger.declare_project("bob", "cold frame")
-    mark = ledger.earmark(project["id"], "K010")
+    mark = ledger.earmark(project["id"], "K010", "erin")
 
     clock.advance(timedelta(hours=1))
     assert ledger.earmark_status(mark["id"]) == "active"
@@ -74,7 +74,7 @@ def test_project_activity_resets_the_earmark_clock(ledger, clock):
     # well before the window lapses should push the deadline out, proving
     # the generic (not deposit/draw-specific) activity mechanism works.
     project = ledger.declare_project("bob", "cold frame")
-    mark = ledger.earmark(project["id"], "K010")
+    mark = ledger.earmark(project["id"], "K010", "erin")
     t0 = ledger.project_last_activity(project["id"])
 
     clock.advance(timedelta(hours=23))          # still within the 1-day window from t0
@@ -91,7 +91,7 @@ def test_project_activity_resets_the_earmark_clock(ledger, clock):
 
 def test_earmark_without_project_raises(ledger):
     with pytest.raises(LedgerError):
-        ledger.earmark("no-such-project", "K010")
+        ledger.earmark("no-such-project", "K010", "erin")
 
 
 def test_contractor_draw_requires_job_and_client(ledger):
@@ -169,7 +169,7 @@ def test_deposit_feeding_project_without_earmark_still_counts_as_activity(ledger
     # it still resets the clock for the project's OTHER, already-earmarked
     # inventory.
     project = ledger.declare_project("erin", "pallet shed")
-    mark = ledger.earmark(project["id"], "K001")
+    mark = ledger.earmark(project["id"], "K001", "erin")
     clock.advance(timedelta(hours=23))
     ledger.deposit("erin", "K099", project_id=project["id"])   # no earmark=True
     clock.advance(timedelta(hours=2))   # 25h past the original earmark, but only 2h past this deposit
@@ -200,3 +200,110 @@ def test_commons_cannot_draw(ledger):
     ledger.grant_credit(COMMONS_ID, 10)
     with pytest.raises(LedgerError):
         ledger.draw(COMMONS_ID, "builder", "K001", credit_amount=5)
+
+
+# ---------------------------------------------------------------------------
+# Earmark lapse -> credit (docs/ECONOMY.md: good-faith contribution must
+# never evaporate). PR foundation for peak-value crediting (stage 2) and
+# reinstatement/recovery (stage 3) -- deliberately flat-credit only here.
+# ---------------------------------------------------------------------------
+
+def test_lapsed_earmark_releases_material_and_credits_contributor(ledger, clock):
+    project = ledger.declare_project("bob", "cold frame")
+    mark = ledger.earmark(project["id"], "K010", "erin")
+
+    clock.advance(timedelta(days=2))   # past the 1-day inactivity window
+    lapsed = ledger.expire_stale_earmarks()
+
+    assert len(lapsed) == 1
+    assert lapsed[0]["type"] == "earmark_lapse"
+    assert lapsed[0]["data"]["earmark_id"] == mark["id"]
+    assert lapsed[0]["data"]["contributor"] == "erin"
+    assert ledger.balance("erin") == CREDIT_PER_LAPSE_V0
+    # The credit flows to the earmarking contributor, not the project owner.
+    assert ledger.balance("bob") == 0
+
+
+def test_lapsed_earmark_material_returns_to_fungible_reservoir(ledger, clock):
+    project = ledger.declare_project("bob", "cold frame")
+    ledger.earmark(project["id"], "K010", "erin")
+
+    clock.advance(timedelta(days=2))
+    ledger.expire_stale_earmarks()
+
+    assert ledger.is_earmarked("K010") is False
+
+
+def test_expire_stale_earmarks_twice_does_not_double_credit(ledger, clock):
+    project = ledger.declare_project("bob", "cold frame")
+    ledger.earmark(project["id"], "K010", "erin")
+
+    clock.advance(timedelta(days=2))
+    first_pass = ledger.expire_stale_earmarks()
+    second_pass = ledger.expire_stale_earmarks()
+
+    assert len(first_pass) == 1
+    assert len(second_pass) == 0   # already materialized -- nothing new to lapse
+    assert ledger.balance("erin") == CREDIT_PER_LAPSE_V0   # not double-credited
+    lapse_records = [r for r in ledger.all_records() if r["type"] == "earmark_lapse"]
+    assert len(lapse_records) == 1
+
+
+def test_active_earmark_is_untouched_by_expire(ledger, clock):
+    project = ledger.declare_project("bob", "cold frame")
+    mark = ledger.earmark(project["id"], "K010", "erin")
+
+    clock.advance(timedelta(hours=1))   # well within the 1-day window
+    lapsed = ledger.expire_stale_earmarks()
+
+    assert lapsed == []
+    assert ledger.earmark_status(mark["id"]) == "active"
+    assert ledger.is_earmarked("K010") is True
+    assert ledger.balance("erin") == 0
+
+
+def test_lapse_credit_goes_to_the_contributor_not_the_project_owner(ledger, clock):
+    # A donor can earmark material against someone ELSE's declared project
+    # (deposit/earmark carries no owner==contributor requirement today) --
+    # the lapse credit must follow the contributor who made the claim, not
+    # whoever owns the project it was claimed against.
+    project = ledger.declare_project("bob", "cold frame")
+    ledger.earmark(project["id"], "K010", "alice")
+
+    clock.advance(timedelta(days=2))
+    ledger.expire_stale_earmarks()
+
+    assert ledger.balance("alice") == CREDIT_PER_LAPSE_V0
+    assert ledger.balance("bob") == 0
+
+
+def test_earmark_status_stays_expired_after_lapse_even_if_project_reactivates(ledger, clock):
+    # Once materialized, a lapse is permanent -- later project activity
+    # must not resurrect an earmark whose material and credit have already
+    # moved. This is the coexistence fix: earmark_lapse records don't carry
+    # a top-level project_id, so they can't themselves count as activity.
+    project = ledger.declare_project("bob", "cold frame")
+    mark = ledger.earmark(project["id"], "K010", "erin")
+
+    clock.advance(timedelta(days=2))
+    ledger.expire_stale_earmarks()
+    assert ledger.earmark_status(mark["id"]) == "expired"
+
+    ledger.update_project_status(project["id"], "in_progress", note="picking back up")
+    assert ledger.earmark_status(mark["id"]) == "expired"   # still permanently lapsed
+    assert ledger.is_earmarked("K010") is False
+
+
+def test_expire_stale_earmarks_can_be_scoped_to_one_project(ledger, clock):
+    p1 = ledger.declare_project("bob", "cold frame")
+    p2 = ledger.declare_project("carol", "bike trailer")
+    ledger.earmark(p1["id"], "K010", "erin")
+    ledger.earmark(p2["id"], "K020", "dana")
+
+    clock.advance(timedelta(days=2))
+    lapsed = ledger.expire_stale_earmarks(project_id=p1["id"])
+
+    assert len(lapsed) == 1
+    assert lapsed[0]["data"]["project_id"] == p1["id"]
+    assert ledger.balance("erin") == CREDIT_PER_LAPSE_V0
+    assert ledger.balance("dana") == 0   # untouched -- different project, not scanned

@@ -56,7 +56,16 @@ DEFAULT_PATH = "ledger/ledger.jsonl"
 DEFAULT_INACTIVITY_WINDOW = timedelta(days=90)   # tunable; see Ledger(inactivity_window=...)
 
 DRAW_ROLES = {"builder", "contractor"}
-CREDIT_SOURCES = {"donation", "manual_grant"}
+CREDIT_SOURCES = {"donation", "manual_grant", "earmark_lapse"}
+
+CREDIT_PER_LAPSE_V0 = 1   # flat placeholder credit paid to the contributor
+                          # when their earmark lapses -- see
+                          # Ledger.lapse_credit_amount, the seam a future
+                          # stage (peak-value-during-the-earmark's-life
+                          # crediting) replaces. Deliberately NOT derived
+                          # from shortfall/scarcity/demand here, same
+                          # discipline as intake.py's CREDIT_PER_ITEM_V0 and
+                          # matcher/record_draws.py's CREDIT_PER_BUILD_V0.
 
 COMMONS_ID = "commons"   # reserved: the collective pool anonymous deposits
                           # credit to (docs/ECONOMY.md's nonprofit mechanism
@@ -192,7 +201,7 @@ class Ledger:
         }, project_id=project_id)
         if project_id is not None:
             if earmark:
-                self.earmark(project_id, inventory_ref)
+                self.earmark(project_id, inventory_ref, donor)
         elif credit_amount:
             self.grant_credit(donor, credit_amount, source="donation",
                                reference=deposit_record["id"])
@@ -275,14 +284,21 @@ class Ledger:
         return self._append("project_status", {"status": status, "note": note},
                              project_id=project_id)
 
-    def earmark(self, project_id, inventory_ref):
+    def earmark(self, project_id, inventory_ref, contributor):
         """Reserves specific inventory against a declared project. No
-        project, no earmark. No separate "release" event is ever
-        written -- expiry is a pure function of time (see
-        earmark_status), not a mutation."""
+        project, no earmark. contributor is whoever is making this claim
+        (typically the donor, when reached via deposit(earmark=True)) --
+        required, not optional, because it's who gets credited if this
+        earmark later lapses (see expire_stale_earmarks): an earmark with
+        no recorded contributor could never be correctly paid back.
+
+        Live status (earmark_status) is still a pure function of time
+        until something actually materializes a lapse -- see
+        expire_stale_earmarks for that written, permanent event."""
         if self._find_project(project_id) is None:
             raise LedgerError(f"no such project: {project_id} -- no project, no earmark")
-        return self._append("earmark", {"inventory_ref": inventory_ref}, project_id=project_id)
+        return self._append("earmark", {"inventory_ref": inventory_ref, "contributor": contributor},
+                             project_id=project_id)
 
     def _find_project(self, project_id):
         for r in self._replay():
@@ -313,10 +329,83 @@ class Ledger:
                 break
         if earmark_record is None:
             raise LedgerError(f"no such earmark: {earmark_id}")
+        # Once a lapse has been materialized (expire_stale_earmarks), that
+        # written record is permanently authoritative -- the material's
+        # already back in the pool and the contributor's already been
+        # credited, so this must never depend on live project activity
+        # again. Without this check, later activity on the project could
+        # otherwise flip this back to "active" and silently contradict an
+        # already-paid lapse.
+        if self._find_lapse(earmark_id) is not None:
+            return "expired"
         last_active = self.project_last_activity(earmark_record["project_id"])
         if last_active is None:
             return "expired"
         return "active" if (as_of - last_active) <= self.inactivity_window else "expired"
+
+    def _find_lapse(self, earmark_id):
+        for r in self._replay():
+            if r["type"] == "earmark_lapse" and r["data"]["earmark_id"] == earmark_id:
+                return r
+        return None
+
+    def lapse_credit_amount(self, earmark_record):
+        """The stage-2/peak-value seam: today a flat placeholder
+        (CREDIT_PER_LAPSE_V0), not yet the peak-value-during-the-earmark's
+        -life logic a future stage adds. Takes the full earmark record
+        (not just its id) so that future logic can inspect its history
+        via self._replay()/self._clock() without a signature change."""
+        return CREDIT_PER_LAPSE_V0
+
+    def expire_stale_earmarks(self, project_id=None, as_of=None):
+        """The explicit "expire stale earmarks" operation: a stalled
+        project must release its earmarked material back to the reservoir
+        AND pay back the contributor who earmarked it -- good-faith
+        contribution should never simply evaporate just because the
+        project it was claimed against stalled. Not a background/scheduled
+        job; something the system runs, e.g. when a project is noticed to
+        have stalled. Optionally scoped to a single project_id; scans all
+        earmarks otherwise.
+
+        For each earmark whose live status (earmark_status -- the trigger,
+        unchanged by this method) currently computes "expired" and hasn't
+        already been materialized, writes a permanent earmark_lapse record
+        and credits the contributor who created it (lapse_credit_amount).
+        Already-materialized earmarks are skipped -- calling this twice
+        does not double-credit. Returns the list of newly materialized
+        earmark_lapse records (empty if nothing was newly lapsed)."""
+        as_of = as_of or self._clock()
+        newly_lapsed = []
+        for r in self._replay():
+            if r["type"] != "earmark":
+                continue
+            if project_id is not None and r["project_id"] != project_id:
+                continue
+            if self._find_lapse(r["id"]) is not None:
+                continue   # already materialized -- idempotency guard
+            if self.earmark_status(r["id"], as_of=as_of) != "expired":
+                continue   # still active -- untouched
+            newly_lapsed.append(self._materialize_lapse(r))
+        return newly_lapsed
+
+    def _materialize_lapse(self, earmark_record):
+        contributor = earmark_record["data"]["contributor"]
+        amount = self.lapse_credit_amount(earmark_record)
+        # No top-level project_id -- see earmark_status's comment above:
+        # project_last_activity() treats ANY record carrying project_id as
+        # activity, and this record must not revive the very earmark (or
+        # its siblings under the same project) it's releasing. project_id
+        # still lives in the data payload for reference/filtering.
+        lapse_record = self._append("earmark_lapse", {
+            "earmark_id": earmark_record["id"],
+            "project_id": earmark_record["project_id"],
+            "inventory_ref": earmark_record["data"]["inventory_ref"],
+            "contributor": contributor,
+            "credit_amount": amount,
+        })
+        self.grant_credit(contributor, amount, source="earmark_lapse",
+                           reference=lapse_record["id"])
+        return lapse_record
 
     def is_earmarked(self, inventory_ref, as_of=None):
         """Whether the reservoir currently treats this item as reserved
